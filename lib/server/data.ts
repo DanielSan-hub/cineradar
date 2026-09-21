@@ -40,11 +40,14 @@ function mapRecord(record: Record<string, unknown>): Opportunity {
   };
 }
 
-async function supabaseRequest(path: string, init?: RequestInit) {
-  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+async function supabaseRequest(
+  path: string,
+  key: string | undefined,
+  init?: RequestInit,
+) {
+  if (!SUPABASE_URL || !key) {
     throw new Error("Supabase is not configured");
   }
-  const key = SUPABASE_SERVICE_ROLE_KEY ?? SUPABASE_ANON_KEY;
   const response = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
     ...init,
     headers: {
@@ -70,9 +73,13 @@ export async function getOpportunities(): Promise<{
   }
   try {
     const response = await supabaseRequest(
-      "opportunities?select=*&status=neq.closed&order=featured.desc,deadline.asc.nullslast&limit=250",
+      "opportunities?select=*&status=in.(verified,open,closing-soon)&order=featured.desc,deadline.asc.nullslast&limit=250",
+      SUPABASE_ANON_KEY,
     );
     const records = (await response.json()) as Record<string, unknown>[];
+    if (records.length === 0) {
+      return { opportunities: demoOpportunities, demoMode: true };
+    }
     return { opportunities: records.map(mapRecord), demoMode: false };
   } catch (error) {
     console.error("Falling back to demo opportunities", error);
@@ -85,10 +92,19 @@ export async function getPipelineHealth(): Promise<PipelineHealth> {
   try {
     const [runsResponse, sourceResponse, openResponse, leadResponse] =
       await Promise.all([
-        supabaseRequest("pipeline_runs?select=kind,finished_at,status&order=finished_at.desc&limit=10"),
-        supabaseRequest("sources?select=id&enabled=eq.true"),
-        supabaseRequest("opportunities?select=id&status=in.(open,closing-soon)"),
-        supabaseRequest("opportunities?select=id&status=in.(signal,discovered)"),
+        supabaseRequest(
+          "pipeline_runs?select=kind,finished_at,status&order=finished_at.desc&limit=10",
+          SUPABASE_SERVICE_ROLE_KEY,
+        ),
+        supabaseRequest("sources?select=id&enabled=eq.true", SUPABASE_SERVICE_ROLE_KEY),
+        supabaseRequest(
+          "opportunities?select=id&status=in.(open,closing-soon)",
+          SUPABASE_SERVICE_ROLE_KEY,
+        ),
+        supabaseRequest(
+          "opportunities?select=id&status=in.(signal,discovered)",
+          SUPABASE_SERVICE_ROLE_KEY,
+        ),
       ]);
     const runs = (await runsResponse.json()) as Array<{
       kind: string;
@@ -114,10 +130,14 @@ export async function upsertOpportunities(records: Record<string, unknown>[]) {
   if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
     throw new Error("Supabase service credentials are not configured");
   }
-  const response = await supabaseRequest("opportunities?on_conflict=source_url", {
-    method: "POST",
-    headers: { Prefer: "resolution=merge-duplicates,return=representation" },
-    body: JSON.stringify(records),
-  });
-  return response.json();
+  const response = await supabaseRequest(
+    "opportunities?on_conflict=source_url",
+    SUPABASE_SERVICE_ROLE_KEY,
+    {
+      method: "POST",
+      headers: { Prefer: "resolution=merge-duplicates,return=representation" },
+      body: JSON.stringify(records),
+    },
+  );
+  return (await response.json()) as Record<string, unknown>[];
 }
