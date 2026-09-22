@@ -9,10 +9,19 @@ const allowedCategories = [
 const prompt = `You extract filmmaker opportunities from web pages. Return only one JSON object.
 If the page is not a real or plausible festival, contest, grant, residency or creative call for filmmakers, return {"relevant":false}.
 Never invent dates, prizes, fees, eligibility or URLs. Use null when unknown.
+prize_amount is the exact total prize pool, not the largest individual award. Use null for approximate amounts such as "over" or "up to".
+official_url must be an absolute http:// or https:// URL copied from the source. Otherwise use null.
 Required shape:
 {"relevant":boolean,"title":string|null,"organizer":string|null,"category":string|null,"status":"signal"|"discovered"|"verified"|"open"|"closing-soon"|"closed","ai_policy":"allowed"|"required"|"restricted"|"unclear","deadline":string|null,"opens_at":string|null,"prize_amount":number|null,"prize_currency":"EUR"|"USD"|"GBP"|null,"entry_fee_amount":number|null,"entry_fee_currency":"EUR"|"USD"|"GBP"|null,"location":string|null,"remote":boolean,"max_runtime_minutes":number|null,"official_url":string|null,"source_type":"official"|"press"|"social"|"community","confidence":number,"summary":string,"eligibility":string[],"formats":string[],"tags":string[]}`;
 
-function parseJson(text) {
+function parseJson(value) {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value;
+  }
+  if (typeof value !== "string") {
+    throw new Error("LLM returned an unsupported response type");
+  }
+  const text = value;
   const cleaned = text.trim().replace(/^```json\s*/i, "").replace(/```$/i, "");
   const start = cleaned.indexOf("{");
   const end = cleaned.lastIndexOf("}");
@@ -28,12 +37,21 @@ function normalize(raw, sourceUrl) {
   const title = String(raw.title ?? "").trim();
   if (!title) return null;
   const slug = title.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 80);
+  let officialUrl = null;
+  try {
+    const candidate = new URL(String(raw.official_url ?? ""));
+    if (["http:", "https:"].includes(candidate.protocol)) {
+      officialUrl = candidate.href;
+    }
+  } catch {
+    // Invalid or relative URLs are unknown, not publishable links.
+  }
   return {
     slug: slug || `opportunity-${Date.now()}`,
     title,
     organizer: String(raw.organizer ?? "Unknown organizer"),
     category,
-    status: raw.status ?? "discovered",
+    status: "discovered",
     ai_policy: raw.ai_policy ?? "unclear",
     deadline: raw.deadline ?? null,
     opens_at: raw.opens_at ?? null,
@@ -45,7 +63,7 @@ function normalize(raw, sourceUrl) {
     remote: Boolean(raw.remote),
     max_runtime_minutes: raw.max_runtime_minutes ?? null,
     source_url: sourceUrl,
-    official_url: raw.official_url ?? null,
+    official_url: officialUrl,
     source_type: raw.source_type ?? "official",
     confidence: Math.max(0, Math.min(1, Number(raw.confidence ?? 0.5))),
     summary: String(raw.summary ?? "").slice(0, 800),
