@@ -2,9 +2,8 @@ name: CineRadar source monitor
 
 on:
   workflow_dispatch:
-  # Enable only after the bounded live smoke test and one successful manual run.
-  # schedule:
-  #   - cron: "43 */6 * * *"
+  schedule:
+    - cron: "43 */6 * * *"
 
 concurrency:
   group: cineradar-monitor

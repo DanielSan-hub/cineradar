@@ -2,9 +2,8 @@ name: CineRadar discovery
 
 on:
   workflow_dispatch:
-  # Enable only after the bounded live smoke test and one successful manual run.
-  # schedule:
-  #   - cron: "17 6,18 * * *"
+  schedule:
+    - cron: "17 6,18 * * *"
 
 concurrency:
   group: cineradar-discovery
