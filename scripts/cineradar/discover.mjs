@@ -1,57 +1,104 @@
-import { config, discoveryQueries, requireEnv } from "./config.mjs";
-import { mapPool, fetchWithTimeout } from "./http.mjs";
-import { extractOpportunity } from "./llm.mjs";
+import { config, requireEnv, selectDiscoveryQueries } from "./config.mjs";
+import { fetchWithTimeout, mapPool } from "./http.mjs";
+import { dedupeOpportunitiesDetailed } from "./normalization.mjs";
+import { processFetchedPage } from "./process-page.mjs";
+import {
+  createRunMetrics,
+  incrementMetric,
+  metricsRunPatch,
+  recordRejection,
+  summarizeMetrics,
+} from "./telemetry.mjs";
 import { finishRun, ingest, startRun } from "./supabase.mjs";
+import { canonicalizeUrl, fetchPage } from "./web-validation.mjs";
 
 requireEnv("EXA_API_KEY");
-const run = await startRun("discovery");
-let candidates = 0;
-let written = 0;
 
-try {
-  const queries = discoveryQueries.slice(0, config.discoveryQueryLimit);
-  const batches = await mapPool(queries, 6, async (query) => {
+const run = await startRun("discovery");
+const metrics = createRunMetrics("discovery");
+
+async function searchExa(query) {
+  incrementMetric(metrics, "queries");
+  try {
     const response = await fetchWithTimeout("https://api.exa.ai/search", {
       method: "POST",
-      headers: { "x-api-key": config.exaApiKey, "Content-Type": "application/json" },
+      headers: {
+        "x-api-key": config.exaApiKey,
+        "Content-Type": "application/json",
+      },
       body: JSON.stringify({
         query,
         type: "auto",
         numResults: config.discoveryResultLimit,
-        startPublishedDate: new Date(Date.now() - 120 * 86_400_000).toISOString(),
-        contents: { text: { maxCharacters: 18000 }, highlights: { numSentences: 8 } },
+        contents: { highlights: { numSentences: 4 } },
       }),
     });
     if (!response.ok) throw new Error(`Exa ${response.status}: ${await response.text()}`);
     const body = await response.json();
     return body.results ?? [];
-  });
+  } catch (error) {
+    recordRejection(metrics, "DISCOVERY_QUERY_FAILED");
+    console.warn(`Discovery query failed (${query.slice(0, 80)}): ${error.message}`);
+    return [];
+  }
+}
 
+try {
+  const queries = selectDiscoveryQueries(config.discoveryQueryLimit);
+  const batches = await mapPool(queries, 4, searchExa);
   const unique = new Map();
   for (const result of batches.flat()) {
-    if (result?.url && !unique.has(result.url)) unique.set(result.url, result);
+    const url = canonicalizeUrl(result?.url);
+    if (url && !unique.has(url)) unique.set(url, { ...result, url });
+    else if (result?.url && !url) recordRejection(metrics, "INVALID_URL");
   }
-  const pages = [...unique.values()].slice(0, config.maxLlmCalls);
-  candidates = pages.length;
 
-  const extracted = await mapPool(pages, 5, async (result) => {
+  const candidates = [...unique.values()].slice(0, config.maxLlmCalls);
+  incrementMetric(metrics, "discovered", candidates.length);
+  const fetched = (await mapPool(candidates, 8, async (result) => {
     try {
-      return await extractOpportunity({
-        url: result.url,
-        title: result.title,
-        text: result.text ?? result.highlights?.join("\n") ?? "",
-      });
+      const page = await fetchPage(result.url);
+      incrementMetric(metrics, "fetched");
+      return { result, page };
     } catch (error) {
-      console.warn(`Skipped ${result.url}: ${error.message}`);
+      recordRejection(metrics, error.code ?? "FETCH_FAILED");
+      console.warn(`Fetch skipped ${result.url}: ${error.message}`);
       return null;
     }
+  })).filter(Boolean);
+
+  const pageRecords = await mapPool(fetched, config.llmConcurrency, async ({ result, page }) => {
+    try {
+      return await processFetchedPage({
+        page,
+        title: result.title,
+        sourceType: "press",
+        metrics,
+      });
+    } catch (error) {
+      console.warn(`Extraction skipped ${page.finalUrl}: ${error.message}`);
+      return [];
+    }
   });
-  const records = extracted.filter(Boolean);
-  await ingest(records);
-  written = records.length;
-  await finishRun(run.id, { status: "succeeded", candidates, records_written: written });
-  console.log(JSON.stringify({ status: "succeeded", candidates, written }));
+
+  const deduped = dedupeOpportunitiesDetailed(pageRecords.flat());
+  incrementMetric(metrics, "duplicates", deduped.duplicates);
+  const result = await ingest(deduped.records);
+  incrementMetric(metrics, "stored", result.stored);
+  incrementMetric(metrics, "inserted", result.inserted);
+  incrementMetric(metrics, "updated", result.updated);
+  incrementMetric(metrics, "duplicates", result.legacyCollapsed);
+
+  await finishRun(run.id, metricsRunPatch(metrics));
+  console.log(JSON.stringify({ status: "succeeded", ...summarizeMetrics(metrics) }));
 } catch (error) {
-  await finishRun(run.id, { status: "failed", candidates, records_written: written, error: String(error.message).slice(0, 1000) });
+  try {
+    await finishRun(run.id, {
+      ...metricsRunPatch(metrics, "failed"),
+      error: String(error.message).slice(0, 1000),
+    });
+  } catch (finishError) {
+    console.error(`Unable to record failed discovery run: ${finishError.message}`);
+  }
   throw error;
 }

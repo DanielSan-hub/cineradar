@@ -1,3 +1,14 @@
+import { existsSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const scriptDirectory = dirname(fileURLToPath(import.meta.url));
+const localEnvPath = resolve(scriptDirectory, "..", "..", ".env.local");
+
+if (existsSync(localEnvPath) && typeof process.loadEnvFile === "function") {
+  process.loadEnvFile(localEnvPath);
+}
+
 export function requireEnv(name) {
   const value = process.env[name];
   if (!value) throw new Error(`Missing required environment variable: ${name}`);
@@ -20,31 +31,10 @@ export const config = {
   discoveryResultLimit: Number(process.env.DISCOVERY_RESULT_LIMIT ?? 8),
   maxLlmCalls: Number(process.env.MAX_LLM_CALLS_PER_RUN ?? 80),
   timeoutMs: Number(process.env.HTTP_TIMEOUT_MS ?? 12000),
+  llmTimeoutMs: Number(process.env.LLM_TIMEOUT_MS ?? 45000),
+  monitorLinkLimit: Number(process.env.MONITOR_LINK_LIMIT ?? 2),
+  llmConcurrency: Number(process.env.LLM_CONCURRENCY ?? 2),
+  urlValidationConcurrency: Number(process.env.URL_VALIDATION_CONCURRENCY ?? 4),
 };
 
-export const discoveryQueries = [
-  "new AI filmmaking competition open submissions cash prize",
-  "generative video challenge newly announced filmmakers",
-  "AI film festival call for entries open now",
-  "short film grant generative media open call",
-  "experimental film residency AI moving image applications",
-  "creative technology film fellowship open applications",
-  "video generation platform creator contest",
-  "advertising competition generative AI video category",
-  "international short film festival artificial intelligence allowed",
-  "artist residency moving image machine learning open call",
-  "student AI film competition open submissions",
-  "filmmaking grant emerging technology Europe",
-  "site:reddit.com AI film contest submissions",
-  "site:filmfreeway.com AI film festival",
-  "new creator competition video model prize",
-  "film lab AI storytelling applications",
-  "cinema innovation fund filmmakers open call",
-  "AI animation contest international 2026",
-  "generative film screening open submission",
-  "creative AI residency filmmakers 2026",
-  "immersive storytelling grant open call",
-  "brand film awards AI category",
-  "short film pitch competition technology",
-  "new media art festival moving image call",
-];
+export { discoveryQueries, selectDiscoveryQueries } from "./queries.mjs";

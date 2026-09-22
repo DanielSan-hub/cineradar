@@ -15,6 +15,15 @@ export type OpportunityCategory =
   | "Advertising competition";
 
 export type AiPolicy = "allowed" | "required" | "restricted" | "unclear";
+export type OpportunitySortMode = "urgent" | "newest" | "prize";
+export type DeadlineStatus = "confirmed" | "estimated" | "unknown" | "rolling";
+
+export type UrlVerificationStatus =
+  | "verified"
+  | "redirected"
+  | "invalid"
+  | "unreachable"
+  | "unchecked";
 
 export type Opportunity = {
   id: string;
@@ -25,6 +34,9 @@ export type Opportunity = {
   status: OpportunityStatus;
   aiPolicy: AiPolicy;
   deadline: string | null;
+  deadlineStatus?: DeadlineStatus;
+  deadlineSourceUrl?: string | null;
+  deadlineLastVerifiedAt?: string | null;
   opensAt: string | null;
   prizeAmount: number | null;
   prizeCurrency: "EUR" | "USD" | "GBP" | null;
@@ -33,8 +45,21 @@ export type Opportunity = {
   location: string;
   remote: boolean;
   maxRuntimeMinutes: number | null;
-  sourceUrl: string;
+  sourceUrl: string | null;
   officialUrl: string | null;
+  applicationUrl?: string | null;
+  sourceUrlStatus?: UrlVerificationStatus;
+  officialUrlStatus?: UrlVerificationStatus;
+  applicationUrlStatus?: UrlVerificationStatus;
+  sourceUrlHttpStatus?: number | null;
+  officialUrlHttpStatus?: number | null;
+  applicationUrlHttpStatus?: number | null;
+  sourceUrlLastCheckedAt?: string | null;
+  officialUrlLastCheckedAt?: string | null;
+  applicationUrlLastCheckedAt?: string | null;
+  sourceUrlVerified?: boolean;
+  officialUrlVerified?: boolean;
+  applicationUrlVerified?: boolean;
   sourceType: "official" | "press" | "social" | "community";
   confidence: number;
   summary: string;
@@ -54,4 +79,23 @@ export type PipelineHealth = {
   leadsPending: number;
   recordsOpen: number;
   demoMode: boolean;
+};
+
+export type OpportunitiesPage = {
+  opportunities: Opportunity[];
+  total: number;
+  limit: number;
+  offset: number;
+  hasMore: boolean;
+  demoMode: boolean;
+  error?: string;
+};
+
+export type OpportunityPageOptions = {
+  limit?: number;
+  offset?: number;
+  query?: string;
+  category?: OpportunityCategory | "all";
+  aiPolicy?: AiPolicy | "all";
+  sort?: OpportunitySortMode;
 };

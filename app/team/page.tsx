@@ -15,20 +15,19 @@ import {
 import { chatGPTSignOutPath, requireChatGPTUser } from "@/app/chatgpt-auth";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { getOpportunities, getPipelineHealth } from "@/lib/server/data";
+import { getPipelineHealth, getReviewQueue } from "@/lib/server/data";
+import type { Opportunity } from "@/lib/types";
 
 export const metadata: Metadata = { title: "Team room" };
 export const dynamic = "force-dynamic";
 
 export default async function TeamPage() {
-  const [user, { opportunities, demoMode }, health] = await Promise.all([
+  const [user, reviewPage, health] = await Promise.all([
     requireChatGPTUser("/team"),
-    getOpportunities(),
+    getReviewQueue({ limit: 50, offset: 0 }),
     getPipelineHealth(),
   ]);
-  const queue = opportunities.filter((item) =>
-    ["signal", "discovered"].includes(item.status),
-  );
+  const queue = reviewPage.opportunities;
 
   return (
     <main className="min-h-screen bg-[#071018] text-slate-100">
@@ -53,21 +52,27 @@ export default async function TeamPage() {
             <h1 className="mt-2 text-3xl font-semibold tracking-[-0.04em] text-white">Verification queue</h1>
             <p className="mt-2 text-slate-400">Turn discovery signals into trustworthy public records.</p>
           </div>
-          {demoMode && <Badge variant="outline" className="w-fit border-amber-300/30 bg-amber-300/8 text-amber-100">Demo mode</Badge>}
+          {reviewPage.demoMode && <Badge variant="outline" className="w-fit border-amber-300/30 bg-amber-300/8 text-amber-100">Demo mode</Badge>}
         </div>
 
         <section className="mt-7 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <TeamMetric icon={<SearchCheck />} label="Pending review" value={String(queue.length)} />
+          <TeamMetric icon={<SearchCheck />} label="Pending review" value={String(reviewPage.total)} />
           <TeamMetric icon={<Database />} label="Sources tracked" value={String(health.sourcesTracked)} />
           <TeamMetric icon={<CheckCircle2 />} label="Open records" value={String(health.recordsOpen)} />
           <TeamMetric icon={<Clock3 />} label="Last discovery" value={health.lastDiscoveryAt ? new Intl.DateTimeFormat("en", { hour: "2-digit", minute: "2-digit" }).format(new Date(health.lastDiscoveryAt)) : "—"} />
         </section>
 
+        {reviewPage.error && (
+          <p role="alert" className="mt-6 rounded-xl border border-rose-300/15 bg-rose-300/5 px-4 py-3 text-sm text-rose-200">
+            The live verification queue is temporarily unavailable. No demo records were substituted.
+          </p>
+        )}
+
         <section className="mt-8 grid gap-5 lg:grid-cols-[minmax(0,1fr)_330px]">
           <div>
             <div className="mb-3 flex items-center justify-between">
               <h2 className="text-lg font-medium text-white">Needs verification</h2>
-              <span className="text-sm text-slate-500">{queue.length} records</span>
+              <span className="text-sm text-slate-500">Showing {queue.length} of {reviewPage.total} records</span>
             </div>
             <div className="space-y-3">
               {queue.map((item) => (
@@ -82,9 +87,7 @@ export default async function TeamPage() {
                       <p className="mt-1 text-sm text-slate-500">{item.organizer} · {item.sourceType}</p>
                       <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-300">{item.summary}</p>
                     </div>
-                    <Button asChild variant="outline" className="shrink-0 border-white/12 bg-white/4 text-white hover:bg-white/8">
-                      <a href={item.sourceUrl} target="_blank" rel="noreferrer">Inspect source <ArrowUpRight /></a>
-                    </Button>
+                    <ReviewLinks opportunity={item} />
                   </div>
                 </article>
               ))}
@@ -111,4 +114,44 @@ export default async function TeamPage() {
 
 function TeamMetric({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
   return <div className="rounded-2xl border border-white/8 bg-white/[0.025] p-4"><div className="flex items-center justify-between"><span className="text-slate-500 [&_svg]:size-4">{icon}</span><strong className="text-xl font-semibold text-white">{value}</strong></div><p className="mt-4 text-sm text-slate-400">{label}</p></div>;
+}
+
+function displayableUrl(url: string | null | undefined, demo?: boolean) {
+  if (!url || demo) return null;
+  try {
+    const parsed = new URL(url);
+    if (!["http:", "https:"].includes(parsed.protocol)) return null;
+    if (parsed.hostname === "example.com" || parsed.hostname.endsWith(".example.com")) return null;
+    return parsed.href;
+  } catch {
+    return null;
+  }
+}
+
+function ReviewLinks({ opportunity }: { opportunity: Opportunity }) {
+  const sourceUrl = displayableUrl(opportunity.sourceUrl, opportunity.demo);
+  const officialUrl = opportunity.officialUrlVerified
+    ? displayableUrl(opportunity.officialUrl, opportunity.demo)
+    : null;
+  const applicationUrl = opportunity.applicationUrlVerified
+    ? displayableUrl(opportunity.applicationUrl, opportunity.demo)
+    : null;
+  const links = [
+    { label: "Source", url: sourceUrl },
+    { label: "Official website", url: officialUrl },
+    { label: "Application page", url: applicationUrl },
+  ].filter((link): link is { label: string; url: string } => Boolean(link.url));
+
+  if (!links.length) {
+    return <span className="shrink-0 text-sm text-slate-500">No usable link</span>;
+  }
+  return (
+    <div className="flex shrink-0 flex-wrap gap-2">
+      {links.map((link) => (
+        <Button key={link.label} asChild variant="outline" className="border-white/12 bg-white/4 text-white hover:bg-white/8">
+          <a href={link.url} target="_blank" rel="noreferrer">{link.label} <ArrowUpRight /></a>
+        </Button>
+      ))}
+    </div>
+  );
 }

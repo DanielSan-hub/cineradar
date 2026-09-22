@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
   ArrowUpRight,
@@ -41,20 +41,26 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { mergeUniqueById } from "@/lib/opportunity-pagination.mjs";
 import type {
+  OpportunitiesPage,
   Opportunity,
   OpportunityCategory,
+  OpportunitySortMode,
   OpportunityStatus,
   PipelineHealth,
 } from "@/lib/types";
 
 type RadarAppProps = {
   initialOpportunities: Opportunity[];
+  initialTotal: number;
+  initialLimit: number;
+  initialHasMore: boolean;
+  initialError: string | null;
   health: PipelineHealth;
   user: { displayName: string; email: string } | null;
 };
 
-type SortMode = "urgent" | "newest" | "prize";
 type ViewMode = "all" | "verified" | "signals" | "saved";
 
 const statusLabel: Record<OpportunityStatus, string> = {
@@ -99,13 +105,15 @@ function daysUntil(deadline: string | null) {
   return Math.ceil((new Date(deadline).getTime() - Date.now()) / 86_400_000);
 }
 
-function formatDeadline(deadline: string | null) {
+function formatDeadline(deadline: string | null, status?: Opportunity["deadlineStatus"]) {
+  if (status === "rolling") return "Rolling deadline";
   if (!deadline) return "Date not announced";
-  return new Intl.DateTimeFormat("en", {
+  const formatted = new Intl.DateTimeFormat("en", {
     day: "numeric",
     month: "short",
     year: "numeric",
   }).format(new Date(deadline));
+  return status === "estimated" ? `About ${formatted}` : formatted;
 }
 
 function freshnessLabel(iso: string | null) {
@@ -119,15 +127,123 @@ function freshnessLabel(iso: string | null) {
   return `${Math.round(hours / 24)}d ago`;
 }
 
-export function RadarApp({ initialOpportunities, health, user }: RadarAppProps) {
+async function requestOpportunityPage(
+  options: {
+    offset: number;
+    limit: number;
+    query: string;
+    category: string;
+    aiPolicy: string;
+    sort: OpportunitySortMode;
+  },
+  signal?: AbortSignal,
+): Promise<OpportunitiesPage> {
+  const params = new URLSearchParams({
+    offset: String(options.offset),
+    limit: String(options.limit),
+    query: options.query,
+    category: options.category,
+    aiPolicy: options.aiPolicy,
+    sort: options.sort,
+  });
+  const response = await fetch(`/api/opportunities?${params.toString()}`, {
+    signal,
+    headers: { Accept: "application/json" },
+  });
+  if (!response.ok) throw new Error(`Unable to load opportunities (${response.status})`);
+  const page = (await response.json()) as OpportunitiesPage;
+  if (!Array.isArray(page.opportunities) || !Number.isFinite(page.total)) {
+    throw new Error("The opportunities API returned an invalid page");
+  }
+  if (page.error) throw new Error("The live catalogue is temporarily unavailable");
+  return page;
+}
+
+function displayableUrl(url: string | null | undefined, demo?: boolean) {
+  if (!url || demo) return null;
+  try {
+    const parsed = new URL(url);
+    if (!["http:", "https:"].includes(parsed.protocol)) return null;
+    if (parsed.hostname === "example.com" || parsed.hostname.endsWith(".example.com")) {
+      return null;
+    }
+    return parsed.href;
+  } catch {
+    return null;
+  }
+}
+
+export function RadarApp({
+  initialOpportunities,
+  initialTotal,
+  initialLimit,
+  initialHasMore,
+  initialError,
+  health,
+  user,
+}: RadarAppProps) {
+  const [opportunities, setOpportunities] = useState(initialOpportunities);
+  const [total, setTotal] = useState(initialTotal);
+  const [hasMore, setHasMore] = useState(initialHasMore);
+  const [nextOffset, setNextOffset] = useState(initialOpportunities.length);
   const [query, setQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
   const [category, setCategory] = useState("all");
   const [aiPolicy, setAiPolicy] = useState("all");
-  const [sort, setSort] = useState<SortMode>("urgent");
+  const [sort, setSort] = useState<OpportunitySortMode>("urgent");
   const [view, setView] = useState<ViewMode>("all");
   const [selected, setSelected] = useState<Opportunity | null>(null);
   const [saved, setSaved] = useState<string[]>([]);
   const [mobileFilters, setMobileFilters] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(initialError);
+  const lastServerQuery = useRef("|all|all|urgent");
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => setDebouncedQuery(query), 300);
+    return () => window.clearTimeout(timeout);
+  }, [query]);
+
+  useEffect(() => {
+    const requestKey = `${debouncedQuery}|${category}|${aiPolicy}|${sort}`;
+    if (requestKey === lastServerQuery.current) return;
+    lastServerQuery.current = requestKey;
+    const controller = new AbortController();
+
+    const reload = async () => {
+      setRefreshing(true);
+      setLoadError(null);
+      try {
+        const page = await requestOpportunityPage(
+          {
+            offset: 0,
+            limit: initialLimit,
+            query: debouncedQuery,
+            category,
+            aiPolicy,
+            sort,
+          },
+          controller.signal,
+        );
+        setOpportunities(page.opportunities);
+        setTotal(page.total);
+        setHasMore(page.hasMore);
+        setNextOffset(page.offset + page.opportunities.length);
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          setLoadError(
+            error instanceof Error ? error.message : "Unable to refresh opportunities",
+          );
+        }
+      } finally {
+        if (!controller.signal.aborted) setRefreshing(false);
+      }
+    };
+
+    void reload();
+    return () => controller.abort();
+  }, [aiPolicy, category, debouncedQuery, initialLimit, sort]);
 
   useEffect(() => {
     const stored = window.localStorage.getItem("cineradar:saved");
@@ -151,9 +267,35 @@ export function RadarApp({ initialOpportunities, health, user }: RadarAppProps) 
     });
   }
 
+  async function loadMore() {
+    if (loadingMore || !hasMore) return;
+    setLoadingMore(true);
+    setLoadError(null);
+    try {
+      const page = await requestOpportunityPage({
+        offset: nextOffset,
+        limit: initialLimit,
+        query: debouncedQuery,
+        category,
+        aiPolicy,
+        sort,
+      });
+      setOpportunities((current) => mergeUniqueById(current, page.opportunities));
+      setTotal(page.total);
+      setHasMore(page.hasMore);
+      setNextOffset(page.offset + page.opportunities.length);
+    } catch (error) {
+      setLoadError(
+        error instanceof Error ? error.message : "Unable to load more opportunities",
+      );
+    } finally {
+      setLoadingMore(false);
+    }
+  }
+
   const filtered = useMemo(() => {
     const normalized = query.trim().toLowerCase();
-    return initialOpportunities
+    return opportunities
       .filter((item) => {
         const text = [
           item.title,
@@ -185,7 +327,7 @@ export function RadarApp({ initialOpportunities, health, user }: RadarAppProps) 
         if (!b.deadline) return -1;
         return +new Date(a.deadline) - +new Date(b.deadline);
       });
-  }, [aiPolicy, category, initialOpportunities, query, saved, sort, view]);
+  }, [aiPolicy, category, opportunities, query, saved, sort, view]);
 
   useEffect(() => {
     const context = document.modelContext;
@@ -234,7 +376,7 @@ export function RadarApp({ initialOpportunities, health, user }: RadarAppProps) 
               typeof input === "object" && input && "opportunityId" in input
                 ? String((input as { opportunityId: unknown }).opportunityId)
                 : "";
-            const exists = initialOpportunities.some((item) => item.id === id);
+            const exists = opportunities.some((item) => item.id === id);
             if (!exists) throw new Error("Opportunity not found");
             setSaved((current) => {
               if (current.includes(id)) return current;
@@ -253,7 +395,7 @@ export function RadarApp({ initialOpportunities, health, user }: RadarAppProps) 
     };
     void safeRegister().catch(console.error);
     return () => lifecycle.abort();
-  }, [initialOpportunities]);
+  }, [opportunities]);
 
   const clearFilters = () => {
     setQuery("");
@@ -354,18 +496,37 @@ export function RadarApp({ initialOpportunities, health, user }: RadarAppProps) 
                 </TabsList>
               </Tabs>
               <div className="flex items-center justify-between gap-3">
-                <span className="text-sm text-slate-500" aria-live="polite">{filtered.length} result{filtered.length === 1 ? "" : "s"}</span>
-                <Select value={sort} onValueChange={(value) => setSort(value as SortMode)}>
+                <span className="text-sm text-slate-500" aria-live="polite">
+                  Showing {filtered.length} of {view === "all" ? total : filtered.length} opportunities
+                  {refreshing ? " · updating…" : ""}
+                </span>
+                <Select value={sort} onValueChange={(value) => setSort(value as OpportunitySortMode)}>
                   <SelectTrigger className="min-w-[150px] border-white/10 bg-white/4 text-slate-200"><SelectValue>{sort === "urgent" ? "Deadline first" : sort === "newest" ? "Newest found" : "Highest prize"}</SelectValue></SelectTrigger>
                   <SelectContent className="border-white/10 bg-[#101b25] text-slate-100"><SelectItem value="urgent">Deadline first</SelectItem><SelectItem value="newest">Newest found</SelectItem><SelectItem value="prize">Highest prize</SelectItem></SelectContent>
                 </Select>
               </div>
             </div>
 
+            {loadError && <p role="alert" className="mb-4 rounded-xl border border-rose-300/15 bg-rose-300/5 px-4 py-3 text-center text-sm text-rose-200">{loadError}</p>}
             {filtered.length ? (
-              <div className="grid gap-4 xl:grid-cols-2">
-                {filtered.map((opportunity) => <OpportunityCard key={opportunity.id} opportunity={opportunity} saved={saved.includes(opportunity.id)} onSave={() => toggleSaved(opportunity.id)} onOpen={() => setSelected(opportunity)} />)}
-              </div>
+              <>
+                <div className={`grid gap-4 transition-opacity xl:grid-cols-2 ${refreshing ? "opacity-55" : "opacity-100"}`}>
+                  {filtered.map((opportunity) => <OpportunityCard key={opportunity.id} opportunity={opportunity} saved={saved.includes(opportunity.id)} onSave={() => toggleSaved(opportunity.id)} onOpen={() => setSelected(opportunity)} />)}
+                </div>
+                {view === "all" && hasMore && (
+                  <div className="mt-6 flex justify-center">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      disabled={loadingMore || refreshing}
+                      onClick={() => void loadMore()}
+                      className="min-w-44 border-white/12 bg-white/4 text-white hover:bg-white/8"
+                    >
+                      {loadingMore ? "Loading…" : "Load more"}
+                    </Button>
+                  </div>
+                )}
+              </>
             ) : (
               <div className="grid min-h-[340px] place-items-center rounded-2xl border border-dashed border-white/12 bg-white/[0.02] px-6 text-center"><div><Radar className="mx-auto size-10 text-slate-600" /><h2 className="mt-4 text-lg font-medium text-white">No opportunities on this bearing</h2><p className="mt-2 text-sm text-slate-400">Remove a filter or try a broader search.</p><Button onClick={clearFilters} variant="outline" className="mt-5 border-white/12 bg-white/4 text-white hover:bg-white/8">Clear filters</Button></div></div>
             )}
@@ -377,7 +538,42 @@ export function RadarApp({ initialOpportunities, health, user }: RadarAppProps) 
 
       <Sheet open={Boolean(selected)} onOpenChange={(open) => !open && setSelected(null)}>
         <SheetContent className="w-full border-white/10 bg-[#09141e] text-slate-100 sm:max-w-xl">
-          {selected && <><SheetHeader className="border-b border-white/8 p-6 pr-14"><div className="mb-3 flex flex-wrap gap-2"><Badge variant="outline" className={statusClass[selected.status]}>{statusLabel[selected.status]}</Badge><Badge variant="outline" className="border-white/10 bg-white/4 text-slate-300">{selected.category}</Badge></div><SheetTitle className="text-2xl leading-tight tracking-[-0.03em] text-white">{selected.title}</SheetTitle><SheetDescription className="text-slate-400">{selected.organizer}</SheetDescription></SheetHeader><div className="flex-1 overflow-y-auto px-6 py-5"><p className="text-base leading-7 text-slate-300">{selected.summary}</p><div className="mt-6 grid grid-cols-2 gap-3"><DetailStat icon={<CalendarDays />} label="Deadline" value={formatDeadline(selected.deadline)} /><DetailStat icon={<CircleDollarSign />} label="Prize" value={formatMoney(selected.prizeAmount, selected.prizeCurrency)} /><DetailStat icon={<Film />} label="Max runtime" value={selected.maxRuntimeMinutes ? `${selected.maxRuntimeMinutes} min` : "Not stated"} /><DetailStat icon={<MapPin />} label="Location" value={selected.location} /></div><DetailSection title="Eligibility" items={selected.eligibility} /><DetailSection title="Accepted formats" items={selected.formats} /><div className="mt-6 rounded-xl border border-white/8 bg-white/[0.025] p-4"><div className="flex items-center justify-between gap-4"><div><p className="text-sm font-medium text-white">Source confidence</p><p className="mt-1 text-sm text-slate-400">Based on source authority and extracted fields.</p></div><span className="text-lg font-semibold text-cyan-200">{Math.round(selected.confidence * 100)}%</span></div><div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white/8"><div className="h-full rounded-full bg-cyan-300" style={{ width: `${selected.confidence * 100}%` }} /></div></div></div><SheetFooter className="border-t border-white/8 p-5 sm:flex-row"><Button variant="outline" className="border-white/12 bg-white/4 text-white hover:bg-white/8" onClick={() => toggleSaved(selected.id)}>{saved.includes(selected.id) ? <BookmarkCheck /> : <Bookmark />}{saved.includes(selected.id) ? "Saved" : "Save"}</Button><Button asChild className="bg-cyan-300 text-[#061018] hover:bg-cyan-200"><a href={selected.officialUrl ?? selected.sourceUrl} target="_blank" rel="noreferrer">Open source <ArrowUpRight /></a></Button></SheetFooter></>}
+          {selected && (
+            <>
+              <SheetHeader className="border-b border-white/8 p-6 pr-14">
+                <div className="mb-3 flex flex-wrap gap-2">
+                  <Badge variant="outline" className={statusClass[selected.status]}>{statusLabel[selected.status]}</Badge>
+                  <Badge variant="outline" className="border-white/10 bg-white/4 text-slate-300">{selected.category}</Badge>
+                </div>
+                <SheetTitle className="text-2xl leading-tight tracking-[-0.03em] text-white">{selected.title}</SheetTitle>
+                <SheetDescription className="text-slate-400">{selected.organizer}</SheetDescription>
+              </SheetHeader>
+              <div className="flex-1 overflow-y-auto px-6 py-5">
+                <p className="text-base leading-7 text-slate-300">{selected.summary}</p>
+                <div className="mt-6 grid grid-cols-2 gap-3">
+                  <DetailStat icon={<CalendarDays />} label="Deadline" value={formatDeadline(selected.deadline, selected.deadlineStatus)} />
+                  <DetailStat icon={<CircleDollarSign />} label="Prize" value={formatMoney(selected.prizeAmount, selected.prizeCurrency)} />
+                  <DetailStat icon={<Film />} label="Max runtime" value={selected.maxRuntimeMinutes ? `${selected.maxRuntimeMinutes} min` : "Not stated"} />
+                  <DetailStat icon={<MapPin />} label="Location" value={selected.location} />
+                </div>
+                <DetailSection title="Eligibility" items={selected.eligibility} />
+                <DetailSection title="Accepted formats" items={selected.formats} />
+                <div className="mt-6 rounded-xl border border-white/8 bg-white/[0.025] p-4">
+                  <div className="flex items-center justify-between gap-4">
+                    <div><p className="text-sm font-medium text-white">Source confidence</p><p className="mt-1 text-sm text-slate-400">Based on source authority and grounded fields.</p></div>
+                    <span className="text-lg font-semibold text-cyan-200">{Math.round(selected.confidence * 100)}%</span>
+                  </div>
+                  <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white/8"><div className="h-full rounded-full bg-cyan-300" style={{ width: `${selected.confidence * 100}%` }} /></div>
+                </div>
+              </div>
+              <SheetFooter className="flex-wrap border-t border-white/8 p-5 sm:flex-row">
+                <Button variant="outline" className="border-white/12 bg-white/4 text-white hover:bg-white/8" onClick={() => toggleSaved(selected.id)}>
+                  {saved.includes(selected.id) ? <BookmarkCheck /> : <Bookmark />}{saved.includes(selected.id) ? "Saved" : "Save"}
+                </Button>
+                <OpportunityLinks opportunity={selected} />
+              </SheetFooter>
+            </>
+          )}
         </SheetContent>
       </Sheet>
 
@@ -396,7 +592,29 @@ function FilterControls({ category, setCategory, aiPolicy, setAiPolicy }: { cate
 
 function OpportunityCard({ opportunity, saved, onSave, onOpen }: { opportunity: Opportunity; saved: boolean; onSave: () => void; onOpen: () => void }) {
   const days = daysUntil(opportunity.deadline);
-  return <article className="group relative flex min-h-[310px] flex-col overflow-hidden rounded-2xl border border-white/8 bg-[linear-gradient(155deg,rgba(255,255,255,.045),rgba(255,255,255,.018))] p-5 transition duration-300 hover:-translate-y-0.5 hover:border-cyan-300/22 hover:shadow-[0_24px_80px_rgba(0,0,0,.22)] sm:p-6"><div className="flex items-start justify-between gap-4"><div className="flex flex-wrap gap-2"><Badge variant="outline" className={statusClass[opportunity.status]}>{statusLabel[opportunity.status]}</Badge>{opportunity.verifiedAt && <Badge variant="outline" className="border-white/10 bg-white/4 text-slate-300"><ShieldCheck className="mr-1 size-3" /> Official source</Badge>}</div><button type="button" onClick={onSave} className="rounded-lg p-2 text-slate-500 transition hover:bg-white/6 hover:text-cyan-200" aria-label={saved ? "Remove from saved" : "Save opportunity"}>{saved ? <BookmarkCheck className="size-5 text-cyan-300" /> : <Bookmark className="size-5" />}</button></div><button type="button" onClick={onOpen} className="mt-5 text-left"><p className="text-xs font-medium uppercase tracking-[0.13em] text-cyan-300/70">{opportunity.category}</p><h2 className="mt-2 text-xl font-semibold leading-tight tracking-[-0.025em] text-white transition group-hover:text-cyan-100">{opportunity.title}</h2><p className="mt-1 text-sm text-slate-500">{opportunity.organizer}</p><p className="mt-4 line-clamp-3 text-sm leading-6 text-slate-300">{opportunity.summary}</p></button><div className="mt-auto pt-6"><div className="grid grid-cols-2 gap-3 border-t border-white/8 pt-4 text-sm"><div><p className="flex items-center gap-1.5 text-xs text-slate-500"><Clock3 className="size-3.5" /> Deadline</p><p className="mt-1 font-medium text-slate-200">{days === null ? "To be announced" : days < 0 ? "Closed" : days === 0 ? "Today" : `${days} days`}</p></div><div><p className="flex items-center gap-1.5 text-xs text-slate-500"><CircleDollarSign className="size-3.5" /> Prize</p><p className="mt-1 font-medium text-slate-200">{formatMoney(opportunity.prizeAmount, opportunity.prizeCurrency)}</p></div></div><button type="button" onClick={onOpen} className="mt-5 flex w-full items-center justify-between rounded-xl bg-white/[0.045] px-4 py-3 text-sm font-medium text-slate-200 transition hover:bg-cyan-300/10 hover:text-cyan-100">Review opportunity <ChevronRight className="size-4 transition-transform group-hover:translate-x-0.5" /></button></div></article>;
+  return <article className="group relative flex min-h-[310px] flex-col overflow-hidden rounded-2xl border border-white/8 bg-[linear-gradient(155deg,rgba(255,255,255,.045),rgba(255,255,255,.018))] p-5 transition duration-300 hover:-translate-y-0.5 hover:border-cyan-300/22 hover:shadow-[0_24px_80px_rgba(0,0,0,.22)] sm:p-6"><div className="flex items-start justify-between gap-4"><div className="flex flex-wrap gap-2"><Badge variant="outline" className={statusClass[opportunity.status]}>{statusLabel[opportunity.status]}</Badge>{opportunity.officialUrlVerified && <Badge variant="outline" className="border-white/10 bg-white/4 text-slate-300"><ShieldCheck className="mr-1 size-3" /> Official source</Badge>}</div><button type="button" onClick={onSave} className="rounded-lg p-2 text-slate-500 transition hover:bg-white/6 hover:text-cyan-200" aria-label={saved ? "Remove from saved" : "Save opportunity"}>{saved ? <BookmarkCheck className="size-5 text-cyan-300" /> : <Bookmark className="size-5" />}</button></div><button type="button" onClick={onOpen} className="mt-5 text-left"><p className="text-xs font-medium uppercase tracking-[0.13em] text-cyan-300/70">{opportunity.category}</p><h2 className="mt-2 text-xl font-semibold leading-tight tracking-[-0.025em] text-white transition group-hover:text-cyan-100">{opportunity.title}</h2><p className="mt-1 text-sm text-slate-500">{opportunity.organizer}</p><p className="mt-4 line-clamp-3 text-sm leading-6 text-slate-300">{opportunity.summary}</p></button><div className="mt-auto pt-6"><div className="grid grid-cols-2 gap-3 border-t border-white/8 pt-4 text-sm"><div><p className="flex items-center gap-1.5 text-xs text-slate-500"><Clock3 className="size-3.5" /> Deadline</p><p className="mt-1 font-medium text-slate-200">{opportunity.deadlineStatus === "rolling" ? "Rolling" : days === null ? "To be announced" : days < 0 ? "Closed" : days === 0 ? "Today" : `${days} days`}</p></div><div><p className="flex items-center gap-1.5 text-xs text-slate-500"><CircleDollarSign className="size-3.5" /> Prize</p><p className="mt-1 font-medium text-slate-200">{formatMoney(opportunity.prizeAmount, opportunity.prizeCurrency)}</p></div></div><button type="button" onClick={onOpen} className="mt-5 flex w-full items-center justify-between rounded-xl bg-white/[0.045] px-4 py-3 text-sm font-medium text-slate-200 transition hover:bg-cyan-300/10 hover:text-cyan-100">Review opportunity <ChevronRight className="size-4 transition-transform group-hover:translate-x-0.5" /></button></div></article>;
+}
+
+function OpportunityLinks({ opportunity }: { opportunity: Opportunity }) {
+  const sourceUrl = displayableUrl(opportunity.sourceUrl, opportunity.demo);
+  const officialUrl = opportunity.officialUrlVerified
+    ? displayableUrl(opportunity.officialUrl, opportunity.demo)
+    : null;
+  const applicationUrl = opportunity.applicationUrlVerified
+    ? displayableUrl(opportunity.applicationUrl, opportunity.demo)
+    : null;
+  const links = [
+    { label: "Official website", url: officialUrl },
+    { label: "Apply", url: applicationUrl },
+    { label: "Source", url: sourceUrl },
+  ].filter((link): link is { label: string; url: string } => Boolean(link.url));
+
+  if (!links.length) return <span className="self-center text-sm text-slate-500">No verified link</span>;
+  return links.map((link) => (
+    <Button key={link.label} asChild variant={link.label === "Apply" ? "default" : "outline"} className={link.label === "Apply" ? "bg-cyan-300 text-[#061018] hover:bg-cyan-200" : "border-white/12 bg-white/4 text-white hover:bg-white/8"}>
+      <a href={link.url} target="_blank" rel="noreferrer">{link.label} <ArrowUpRight /></a>
+    </Button>
+  ));
 }
 
 function DetailStat({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {

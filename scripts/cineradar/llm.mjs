@@ -1,78 +1,71 @@
 import { config } from "./config.mjs";
 import { fetchWithTimeout } from "./http.mjs";
 
-const allowedCategories = [
-  "AI film festival", "Traditional festival", "Platform challenge",
-  "Grant", "Residency", "Advertising competition",
-];
+const SYSTEM_PROMPT = `You extract real opportunities for filmmakers from one fetched web page.
+Return only a JSON object with an "opportunities" array (maximum 5 items). Prefer the current, upcoming or rolling call cycle over historical editions. If none are relevant, return {"opportunities":[]}.
 
-const prompt = `You extract filmmaker opportunities from web pages. Return only one JSON object.
-If the page is not a real or plausible festival, contest, grant, residency or creative call for filmmakers, return {"relevant":false}.
-Never invent dates, prizes, fees, eligibility or URLs. Use null when unknown.
-prize_amount is the exact total prize pool, not the largest individual award. Use null for approximate amounts such as "over" or "up to".
-official_url must be an absolute http:// or https:// URL copied from the source. Otherwise use null.
-Required shape:
-{"relevant":boolean,"title":string|null,"organizer":string|null,"category":string|null,"status":"signal"|"discovered"|"verified"|"open"|"closing-soon"|"closed","ai_policy":"allowed"|"required"|"restricted"|"unclear","deadline":string|null,"opens_at":string|null,"prize_amount":number|null,"prize_currency":"EUR"|"USD"|"GBP"|null,"entry_fee_amount":number|null,"entry_fee_currency":"EUR"|"USD"|"GBP"|null,"location":string|null,"remote":boolean,"max_runtime_minutes":number|null,"official_url":string|null,"source_type":"official"|"press"|"social"|"community","confidence":number,"summary":string,"eligibility":string[],"formats":string[],"tags":string[]}`;
+Hard rules:
+- Never construct, autocomplete or guess a URL. official_url, application_url and deadline_source_url must be null or copied exactly from SOURCE URL / ALLOWED LINKS supplied by the user.
+- Never invent a deadline, date, organizer, fee, prize, location, eligibility rule or format. Use null, [], "unknown", or "Unknown organizer" when absent.
+- A listing page may contain several distinct calls: return one item for each, not just the first.
+- An aggregator, article or social page is source_type press/social/community, never official merely because it mentions an event.
+- deadline_status is confirmed only for an explicit published date, estimated only when the page explicitly describes it as approximate, rolling only when explicitly rolling, otherwise unknown.
+- Copy short verbatim supporting snippets (maximum 180 characters each) into deadline_evidence and field_evidence. Evidence must occur in PAGE TEXT. Keep summary under 300 characters and each list to at most 8 concise items.
 
-function parseJson(value) {
-  if (value && typeof value === "object" && !Array.isArray(value)) {
-    return value;
+Each array item has this shape:
+{"relevant":boolean,"title":string|null,"canonical_name":string|null,"organizer":string|null,"category":"AI film festival"|"Traditional festival"|"Platform challenge"|"Grant"|"Residency"|"Advertising competition"|null,"ai_policy":"allowed"|"required"|"restricted"|"unclear","deadline":string|null,"deadline_status":"confirmed"|"estimated"|"unknown"|"rolling","deadline_evidence":string|null,"deadline_source_url":string|null,"opens_at":string|null,"prize_amount":number|null,"prize_currency":string|null,"entry_fee_amount":number|null,"entry_fee_currency":string|null,"location":string|null,"remote":boolean,"max_runtime_minutes":number|null,"official_url":string|null,"application_url":string|null,"source_type":"official"|"press"|"social"|"community","confidence":number,"summary":string,"eligibility":string[],"formats":string[],"tags":string[],"opportunity_year":number|null,"edition":string|null,"field_evidence":{"title":string|null,"organizer":string|null,"opens_at":string|null,"prize":string|null,"entry_fee":string|null,"location":string|null,"max_runtime":string|null,"ai_policy":string|null,"eligibility":string|null,"formats":string|null}}`;
+
+export function parseExtractionPayload(value) {
+  let parsed = value;
+  if (typeof value === "string") {
+    const cleaned = value.trim().replace(/^```json\s*/i, "").replace(/```$/i, "");
+    const start = cleaned.indexOf("{");
+    const end = cleaned.lastIndexOf("}");
+    if (start < 0 || end < start) throw new Error("LLM returned no JSON object");
+    try {
+      parsed = JSON.parse(cleaned.slice(start, end + 1));
+    } catch (error) {
+      const arrayStart = cleaned.indexOf("[", cleaned.indexOf('"opportunities"'));
+      const recovered = [];
+      let objectStart = -1;
+      let depth = 0;
+      let inString = false;
+      let escaped = false;
+      for (let index = Math.max(0, arrayStart + 1); index < cleaned.length; index += 1) {
+        const character = cleaned[index];
+        if (inString) {
+          if (escaped) escaped = false;
+          else if (character === "\\") escaped = true;
+          else if (character === '"') inString = false;
+          continue;
+        }
+        if (character === '"') { inString = true; continue; }
+        if (character === "{") {
+          if (depth === 0) objectStart = index;
+          depth += 1;
+        } else if (character === "}" && depth > 0) {
+          depth -= 1;
+          if (depth === 0 && objectStart >= 0) {
+            try { recovered.push(JSON.parse(cleaned.slice(objectStart, index + 1))); } catch {}
+            objectStart = -1;
+          }
+        }
+      }
+      if (!recovered.length) throw error;
+      parsed = { opportunities: recovered };
+    }
   }
-  if (typeof value !== "string") {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new Error("LLM returned an unsupported response type");
   }
-  const text = value;
-  const cleaned = text.trim().replace(/^```json\s*/i, "").replace(/```$/i, "");
-  const start = cleaned.indexOf("{");
-  const end = cleaned.lastIndexOf("}");
-  if (start < 0 || end < start) throw new Error("LLM returned no JSON object");
-  return JSON.parse(cleaned.slice(start, end + 1));
-}
-
-function normalize(raw, sourceUrl) {
-  if (!raw?.relevant) return null;
-  const category = allowedCategories.includes(raw.category)
-    ? raw.category
-    : "AI film festival";
-  const title = String(raw.title ?? "").trim();
-  if (!title) return null;
-  const slug = title.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 80);
-  let officialUrl = null;
-  try {
-    const candidate = new URL(String(raw.official_url ?? ""));
-    if (["http:", "https:"].includes(candidate.protocol)) {
-      officialUrl = candidate.href;
-    }
-  } catch {
-    // Invalid or relative URLs are unknown, not publishable links.
-  }
-  return {
-    slug: slug || `opportunity-${Date.now()}`,
-    title,
-    organizer: String(raw.organizer ?? "Unknown organizer"),
-    category,
-    status: "discovered",
-    ai_policy: raw.ai_policy ?? "unclear",
-    deadline: raw.deadline ?? null,
-    opens_at: raw.opens_at ?? null,
-    prize_amount: raw.prize_amount ?? null,
-    prize_currency: raw.prize_currency ?? null,
-    entry_fee_amount: raw.entry_fee_amount ?? null,
-    entry_fee_currency: raw.entry_fee_currency ?? null,
-    location: raw.location ?? "Online",
-    remote: Boolean(raw.remote),
-    max_runtime_minutes: raw.max_runtime_minutes ?? null,
-    source_url: sourceUrl,
-    official_url: officialUrl,
-    source_type: raw.source_type ?? "official",
-    confidence: Math.max(0, Math.min(1, Number(raw.confidence ?? 0.5))),
-    summary: String(raw.summary ?? "").slice(0, 800),
-    eligibility: Array.isArray(raw.eligibility) ? raw.eligibility.slice(0, 12) : [],
-    formats: Array.isArray(raw.formats) ? raw.formats.slice(0, 12) : [],
-    tags: Array.isArray(raw.tags) ? raw.tags.slice(0, 16) : [],
-    discovered_at: new Date().toISOString(),
-    raw_payload: raw,
-  };
+  const items = Array.isArray(parsed.opportunities)
+    ? parsed.opportunities
+    : "relevant" in parsed
+      ? [parsed]
+      : [];
+  return items
+    .filter((item) => item && typeof item === "object" && item.relevant !== false)
+    .slice(0, 5);
 }
 
 async function cloudflare(messages) {
@@ -81,9 +74,18 @@ async function cloudflare(messages) {
     `https://api.cloudflare.com/client/v4/accounts/${config.cloudflareAccountId}/ai/run/${config.cloudflareModel}`,
     {
       method: "POST",
-      headers: { Authorization: `Bearer ${config.cloudflareApiToken}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ messages, response_format: { type: "json_object" }, max_tokens: 900, temperature: 0 }),
+      headers: {
+        Authorization: `Bearer ${config.cloudflareApiToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        messages,
+        response_format: { type: "json_object" },
+        max_tokens: 4000,
+        temperature: 0,
+      }),
     },
+    config.llmTimeoutMs,
   );
   if (!response.ok) throw new Error(`Cloudflare AI ${response.status}`);
   const body = await response.json();
@@ -92,20 +94,41 @@ async function cloudflare(messages) {
 
 async function groq(messages) {
   if (!config.groqApiKey) return null;
-  const response = await fetchWithTimeout("https://api.groq.com/openai/v1/chat/completions", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${config.groqApiKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ model: config.groqModel, messages, response_format: { type: "json_object" }, max_completion_tokens: 900, temperature: 0 }),
-  });
+  const response = await fetchWithTimeout(
+    "https://api.groq.com/openai/v1/chat/completions",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${config.groqApiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: config.groqModel,
+        messages,
+        response_format: { type: "json_object" },
+        max_completion_tokens: 4000,
+        temperature: 0,
+      }),
+    },
+    config.llmTimeoutMs,
+  );
   if (!response.ok) throw new Error(`Groq ${response.status}: ${await response.text()}`);
   const body = await response.json();
   return body.choices?.[0]?.message?.content ?? null;
 }
 
-export async function extractOpportunity({ url, title, text }) {
+export async function extractOpportunities({ url, title, text, links = [] }) {
+  const allowedLinks = [...new Set([url, ...links])]
+    .filter(Boolean)
+    .slice(0, 120)
+    .map((link) => `- ${link}`)
+    .join("\n");
   const messages = [
-    { role: "system", content: prompt },
-    { role: "user", content: `SOURCE URL: ${url}\nPAGE TITLE: ${title ?? ""}\nPAGE TEXT:\n${String(text ?? "").slice(0, 24000)}` },
+    { role: "system", content: SYSTEM_PROMPT },
+    {
+      role: "user",
+      content: `SOURCE URL: ${url}\nPAGE TITLE: ${title ?? ""}\nALLOWED LINKS:\n${allowedLinks}\n\nPAGE TEXT:\n${String(text ?? "").slice(0, 60_000)}`,
+    },
   ];
   let output;
   try {
@@ -115,5 +138,10 @@ export async function extractOpportunity({ url, title, text }) {
   }
   if (!output) output = await groq(messages);
   if (!output) throw new Error("No LLM provider configured");
-  return normalize(parseJson(output), url);
+  return parseExtractionPayload(output);
+}
+
+// Backward-compatible helper for callers outside the scheduled pipeline.
+export async function extractOpportunity(input) {
+  return (await extractOpportunities(input))[0] ?? null;
 }
