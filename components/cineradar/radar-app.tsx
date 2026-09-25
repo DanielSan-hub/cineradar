@@ -434,7 +434,7 @@ export function RadarApp({
             </span>
             <Button variant="ghost" size="icon" className="text-slate-300 md:hidden" aria-label="Open filters" onClick={() => setMobileFilters(true)}><Menu /></Button>
             <Button asChild variant="outline" className="border-white/12 bg-white/4 text-slate-100 hover:bg-white/8 hover:text-white">
-              <Link href="/team">{user ? "Team room" : "Team sign in"}</Link>
+              <a href="/team">{user ? "Team room" : "Team sign in"}</a>
             </Button>
           </div>
         </div>
