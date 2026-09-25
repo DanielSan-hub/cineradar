@@ -1,28 +1,18 @@
 import { config, requireEnv } from "./config.mjs";
 import { fetchWithTimeout } from "./http.mjs";
+import {
+  alignOpportunityPayload,
+  INTEGRITY_OPPORTUNITY_FIELDS,
+  reviewRequiredForAutomatedIngest,
+} from "../../lib/ingest-payload.mjs";
 
-const LEGACY_FIELDS = new Set([
-  "slug", "title", "organizer", "category", "status", "ai_policy",
-  "deadline", "opens_at", "prize_amount", "prize_currency",
-  "entry_fee_amount", "entry_fee_currency", "location", "remote",
-  "max_runtime_minutes", "source_url", "official_url", "source_type",
-  "confidence", "summary", "eligibility", "formats", "tags",
-  "discovered_at", "verified_at", "featured", "content_hash", "raw_payload",
-]);
-
-const INTEGRITY_FIELDS = new Set([
-  "canonical_key", "edition_year", "application_url", "deadline_status",
-  "deadline_source_url", "deadline_last_verified_at",
-  "source_url_status", "source_url_http_status", "source_url_final",
-  "source_url_last_checked_at", "source_url_verified_at",
-  "official_url_status", "official_url_http_status", "official_url_final",
-  "official_url_last_checked_at", "official_url_verified_at",
-  "application_url_status", "application_url_http_status", "application_url_final",
-  "application_url_last_checked_at", "application_url_verified_at",
-]);
+const INTEGRITY_FIELDS = new Set(INTEGRITY_OPPORTUNITY_FIELDS);
 
 const PUBLISHED_STATUSES = new Set(["verified", "open", "closing-soon", "closed"]);
-let integritySchemaPromise;
+let integritySchemaConfirmed = false;
+let operationalSchemaConfirmed = false;
+let sourceRegistrySchemaConfirmed = false;
+let temporalSchemaConfirmed = false;
 
 function headers(prefer) {
   const key = requireEnv("SUPABASE_SERVICE_ROLE_KEY");
@@ -45,21 +35,104 @@ async function supabaseResponse(path, init = {}) {
 export async function supabase(path, init = {}) {
   const response = await supabaseResponse(path, init);
   if (!response.ok) throw new Error(`Supabase ${response.status}: ${await response.text()}`);
+  return parseSupabasePayload(response);
+}
+
+export async function parseSupabasePayload(response) {
   if (response.status === 204) return null;
-  return response.json();
+  const body = await response.text();
+  return body.trim() ? JSON.parse(body) : null;
 }
 
 export async function supportsIntegritySchema() {
-  integritySchemaPromise ??= (async () => {
-    const response = await supabaseResponse("opportunities?select=canonical_key&limit=1");
-    if (response.ok) return true;
-    if (response.status === 400) {
-      await response.body?.cancel?.().catch?.(() => {});
-      return false;
+  if (integritySchemaConfirmed) return true;
+  const response = await supabaseResponse("opportunities?select=canonical_key&limit=1");
+  if (response.ok) {
+    await response.body?.cancel?.().catch?.(() => {});
+    integritySchemaConfirmed = true;
+    return true;
+  }
+  const detail = await response.text();
+  if (
+    response.status === 400
+    && /canonical_key/i.test(detail)
+    && /(?:does not exist|schema cache|42703|PGRST)/i.test(detail)
+  ) {
+    return false;
+  }
+  throw new Error(
+    `Unable to inspect Supabase integrity schema (${response.status}): ${detail.slice(0, 300)}`,
+  );
+}
+
+export async function assertOperationalSchema() {
+  if (operationalSchemaConfirmed) return true;
+  if (!await supportsIntegritySchema()) {
+    throw new Error(
+      "OPERATIONAL_SCHEMA_REQUIRED: apply 202609220001_opportunity_integrity_and_audit.sql",
+    );
+  }
+  try {
+    const [usage, provenance, cache, missingKeys] = await Promise.all([
+      supabase("provider_usage_events?select=id&limit=1"),
+      supabase("opportunity_provenance?select=id&limit=1"),
+      supabase("url_fetch_cache?select=canonical_url&limit=1"),
+      supabase("opportunities?select=id&canonical_key=is.null&limit=1"),
+    ]);
+    void usage;
+    void provenance;
+    void cache;
+    if (missingKeys.length) {
+      throw new Error(
+        "CANONICAL_KEY_BACKFILL_REQUIRED: run radar:backfill-integrity",
+      );
     }
-    throw new Error(`Unable to inspect Supabase schema (${response.status})`);
-  })();
-  return integritySchemaPromise;
+  } catch (error) {
+    if (/CANONICAL_KEY_BACKFILL_REQUIRED/.test(error.message)) throw error;
+    throw new Error(
+      `OPERATIONAL_SCHEMA_REQUIRED: apply 202609230001_operational_controls.sql (${error.message})`,
+    );
+  }
+  operationalSchemaConfirmed = true;
+  return true;
+}
+
+export async function assertSourceRegistrySchema() {
+  if (sourceRegistrySchemaConfirmed) return true;
+  await assertOperationalSchema();
+  try {
+    await Promise.all([
+      supabase("sources?select=id,source_family,priority,next_check_at,adapter&limit=1"),
+      supabase("source_checkpoints?select=id&limit=1"),
+      supabase("discovery_attempts?select=id&limit=1"),
+      supabase("discovered_urls?select=id&limit=1"),
+    ]);
+  } catch (error) {
+    throw new Error(
+      `SOURCE_REGISTRY_SCHEMA_REQUIRED: apply 202609230002_source_registry_and_economics.sql (${error.message})`,
+    );
+  }
+  sourceRegistrySchemaConfirmed = true;
+  return true;
+}
+
+export async function assertTemporalSchema() {
+  if (temporalSchemaConfirmed) return true;
+  await assertSourceRegistrySchema();
+  try {
+    await Promise.all([
+      supabase("event_series?select=id&limit=1"),
+      supabase("opportunity_editions?select=id&limit=1"),
+      supabase("opportunity_observations?select=id&limit=1"),
+      supabase("opportunities?select=id,first_seen_at,last_seen_at,review_required&limit=1"),
+    ]);
+  } catch (error) {
+    throw new Error(
+      `TEMPORAL_SCHEMA_REQUIRED: apply 202609230003_temporal_history.sql (${error.message})`,
+    );
+  }
+  temporalSchemaConfirmed = true;
+  return true;
 }
 
 export async function startRun(kind) {
@@ -104,14 +177,6 @@ function withLegacyFallbackPayload(record) {
   };
 }
 
-function sanitizeRecord(record, integrity) {
-  const prepared = integrity ? record : withLegacyFallbackPayload(record);
-  const allowed = integrity ? new Set([...LEGACY_FIELDS, ...INTEGRITY_FIELDS]) : LEGACY_FIELDS;
-  return Object.fromEntries(
-    Object.entries(prepared).filter(([key, value]) => allowed.has(key) && value !== undefined),
-  );
-}
-
 function quotedInValue(value) {
   return `"${String(value).replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
 }
@@ -135,7 +200,7 @@ function shouldKeepExisting(value) {
   return value !== null && value !== undefined && value !== "";
 }
 
-function mergeWithExisting(incoming, existing, conflictField) {
+function mergeWithExisting(incoming, existing, conflictField, { temporalProjection = false } = {}) {
   if (!existing) return incoming;
   const incomingCanonical = incoming.canonical_key ?? incoming.raw_payload?.canonical_key;
   const existingCanonical = existing.canonical_key ?? existing.raw_payload?.canonical_key;
@@ -159,6 +224,21 @@ function mergeWithExisting(incoming, existing, conflictField) {
     }
   }
   if (PUBLISHED_STATUSES.has(existing.status)) merged.status = existing.status;
+  if (temporalProjection) {
+    for (const field of [
+      "status", "deadline", "deadline_status", "deadline_source_url",
+      "deadline_last_verified_at", "previous_deadline", "previous_status",
+      "has_conflict", "review_required", "opportunity_edition_id",
+      "first_seen_at", "last_seen_at", "last_verified_at",
+    ]) {
+      if (field in existing) merged[field] = existing[field];
+    }
+  }
+  if (temporalProjection) {
+    // An automated status claim may update the row later. Keep new and
+    // unreviewed rows behind RLS even if that claim says "open".
+    merged.review_required = reviewRequiredForAutomatedIngest(existing);
+  }
   if (existing.verified_at) merged.verified_at = existing.verified_at;
   if (existing.featured) merged.featured = true;
   if (existing.discovered_at) merged.discovered_at = existing.discovered_at;
@@ -176,9 +256,9 @@ function collapseLegacySourceConflicts(records) {
   return [...bySource.values()];
 }
 
-export async function ingest(records) {
-  if (!records.length) return { records: [], stored: 0, inserted: 0, updated: 0, legacyCollapsed: 0 };
-  if (config.ingestUrl && config.ingestSecret) {
+export async function ingest(records, { temporalProjection = false } = {}) {
+  if (!records.length) return { records: [], stored: 0, inserted: 0, updated: 0, legacyCollapsed: 0, insertedCanonicalKeys: [] };
+  if (config.ingestUrl && config.ingestSecret && !temporalProjection) {
     const response = await fetchWithTimeout(config.ingestUrl, {
       method: "POST",
       headers: {
@@ -195,6 +275,8 @@ export async function ingest(records) {
       inserted: Number(body.inserted ?? 0),
       updated: Number(body.updated ?? 0),
       legacyCollapsed: 0,
+      insertedCanonicalKeys: Array.isArray(body.insertedCanonicalKeys)
+        ? body.insertedCanonicalKeys : [],
     };
   }
 
@@ -203,10 +285,22 @@ export async function ingest(records) {
   const conflictField = integrity ? "canonical_key" : "source_url";
   const existingRows = await fetchExisting(conflictField, input.map((record) => record[conflictField]));
   const existingByKey = new Map(existingRows.map((record) => [record[conflictField], record]));
-  const prepared = input.map((record) => sanitizeRecord(
-    mergeWithExisting(record, existingByKey.get(record[conflictField]), conflictField),
+  const merged = input.map((record) => {
+    const next = mergeWithExisting(
+      record,
+      existingByKey.get(record[conflictField]),
+      conflictField,
+      { temporalProjection },
+    );
+    if (temporalProjection && !existingByKey.has(record[conflictField])) {
+      next.review_required = true;
+    }
+    return integrity ? next : withLegacyFallbackPayload(next);
+  });
+  const prepared = alignOpportunityPayload(merged, {
     integrity,
-  ));
+    reviewGate: temporalProjection,
+  });
   const storedRecords = await supabase(`opportunities?on_conflict=${conflictField}`, {
     method: "POST",
     prefer: "resolution=merge-duplicates,return=representation",
@@ -219,5 +313,9 @@ export async function ingest(records) {
     inserted: prepared.length - updated,
     updated,
     legacyCollapsed: records.length - input.length,
+    insertedCanonicalKeys: prepared
+      .filter((record) => !existingByKey.has(record[conflictField]))
+      .map((record) => record.canonical_key)
+      .filter(Boolean),
   };
 }

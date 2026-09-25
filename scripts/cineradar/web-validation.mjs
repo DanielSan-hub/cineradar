@@ -33,6 +33,13 @@ const LINK_POSITIVE = [
   /\bconcorso\b/i,
   /\bconvocatoria\b/i,
   /\binscri(?:cao|ção|ções|coes)\b/i,
+  /\binscripciones?\b/i,
+  /\bedital\b/i,
+  /\bfomento\b/i,
+  /\bfondo\b/i,
+  /\bbeca\b/i,
+  /\blaboratorio\b/i,
+  /\bresidência\b/i,
   /\bappel.{0,8}(?:projets|films|candidatures)/i,
   /\beinreichung/i,
   /\bwettbewerb/i,
@@ -40,6 +47,7 @@ const LINK_POSITIVE = [
   /募集|応募|提出/,
   /征集|报名|提交/,
   /φεστιβάλ|υποβολ|πρόσκληση/iu,
+  /دعوة|تقديم|مسابقة|منحة|إقامة/,
 ];
 const LINK_STRONG = [
   /\bapply\b/i,
@@ -58,9 +66,15 @@ const LINK_STRONG = [
   /\bbando\b/i,
   /\bconcorso\b/i,
   /\bconvocatoria\b/i,
+  /\binscripciones?\b/i,
+  /\bedital\b/i,
+  /\bfomento\b/i,
+  /\bfondo\b/i,
+  /\bbeca\b/i,
   /\beinreichung/i,
   /募集|応募|提出|征集|报名|제출|공모/,
   /υποβολ|πρόσκληση/iu,
+  /دعوة|تقديم|مسابقة|منحة/,
 ];
 const LINK_NEGATIVE = [
   /(?:^|\/)archive(?:[_/-]|\/|$)/i,
@@ -228,7 +242,7 @@ async function requestFollowingRedirects(
         headers: {
           "User-Agent": "CineRadarBot/2.0 (+https://cineradar.danielmaker.chatgpt.site)",
           Accept: "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.2",
-          "Accept-Language": "en,it;q=0.8,el;q=0.7",
+          "Accept-Language": "en,es;q=0.9,pt;q=0.85,fr;q=0.8,it;q=0.8,de;q=0.75,ar;q=0.7,ja;q=0.65,ko;q=0.65,zh;q=0.65,el;q=0.65",
           ...headers,
         },
       });
@@ -247,7 +261,7 @@ async function requestFollowingRedirects(
         continue;
       }
       const result = {
-        ok: response.status >= 200 && response.status < 300,
+        ok: (response.status >= 200 && response.status < 300) || response.status === 304,
         response,
         input_url: initial,
         final_url: canonicalizeUrl(response.url || current) ?? current,
@@ -297,12 +311,22 @@ async function requestWithRetries(inputUrl, options = {}) {
 
 export async function fetchPage(
   url,
-  { fetchImpl = fetch, timeoutMs = config.timeoutMs, maxCharacters = 120_000 } = {},
+  {
+    fetchImpl = fetch,
+    timeoutMs = config.timeoutMs,
+    maxCharacters = 120_000,
+    etag = null,
+    lastModified = null,
+  } = {},
 ) {
   const result = await requestWithRetries(url, {
     fetchImpl,
     timeoutMs,
     readBody: true,
+    headers: {
+      ...(etag ? { "If-None-Match": etag } : {}),
+      ...(!etag && lastModified ? { "If-Modified-Since": lastModified } : {}),
+    },
   });
   if (!result.ok) {
     const status = result.http_status;
@@ -311,6 +335,28 @@ export async function fetchPage(
     error.code = reason;
     error.validation = result;
     throw error;
+  }
+  if (result.http_status === 304) {
+    try {
+      await result.response.body?.cancel?.();
+    } catch {
+      // A 304 response normally has no body.
+    }
+    return {
+      inputUrl: result.input_url,
+      finalUrl: result.final_url,
+      status: "verified",
+      httpStatus: 304,
+      checkedAt: result.checked_at,
+      redirectChain: result.redirect_chain,
+      notModified: true,
+      etag: result.response.headers?.get?.("etag") ?? etag,
+      lastModified: result.response.headers?.get?.("last-modified") ?? lastModified,
+      html: "",
+      text: "",
+      links: [],
+      linkRecords: [],
+    };
   }
   const contentType = result.response.headers?.get?.("content-type") ?? "";
   if (contentType && !/(?:text\/html|application\/xhtml\+xml|text\/plain)/i.test(contentType)) {
@@ -338,10 +384,13 @@ export async function fetchPage(
     checkedAt: result.checked_at,
     redirectChain: result.redirect_chain,
     contentType,
+    etag: result.response.headers?.get?.("etag") ?? null,
+    lastModified: result.response.headers?.get?.("last-modified") ?? null,
     html,
     text,
     links: extractLinks(html, result.final_url),
     linkRecords: extractLinkRecords(html, result.final_url),
+    notModified: false,
   };
 }
 
@@ -378,10 +427,15 @@ export async function validateUrl(
 
 export function selectOpportunityLinks(
   linkRecords,
-  { sourceUrl, limit = 8, year = new Date().getUTCFullYear() } = {},
+  {
+    sourceUrl,
+    limit = 8,
+    year = new Date().getUTCFullYear(),
+    offset = 0,
+  } = {},
 ) {
   const sourceHost = canonicalizeUrl(sourceUrl) ? new URL(canonicalizeUrl(sourceUrl)).hostname : null;
-  return [...linkRecords]
+  const ranked = [...linkRecords]
     .map((record) => {
       const haystack = `${record.url} ${record.text}`;
       let score = LINK_POSITIVE.reduce((total, pattern) => total + Number(pattern.test(haystack)), 0);
@@ -392,6 +446,32 @@ export function selectOpportunityLinks(
       return { ...record, score, strong };
     })
     .filter((record) => record.score > 0 && record.strong)
-    .sort((a, b) => b.score - a.score || a.url.localeCompare(b.url))
-    .slice(0, Math.max(0, limit));
+    .sort((a, b) => b.score - a.score || a.url.localeCompare(b.url));
+  if (!ranked.length || limit <= 0) return [];
+  const start = Math.max(0, Math.trunc(offset));
+  return ranked.slice(start, start + Math.max(0, Math.trunc(limit)));
+}
+
+/** Public structured listings sometimes expose detail URLs with generic link text. */
+export function selectSourceOpportunityLinks(source, linkRecords, options = {}) {
+  const sourceUrl = options.sourceUrl ?? source?.url;
+  const canonical = canonicalizeUrl(sourceUrl);
+  const host = canonical ? new URL(canonical).hostname.replace(/^www\./i, "") : "";
+  if (source?.source_family === "structured-festival" && host === "festhome.com") {
+    const seen = new Set();
+    const details = (linkRecords ?? []).filter((record) => {
+      const url = canonicalizeUrl(record.url);
+      if (!url) return false;
+      const parsed = new URL(url);
+      const valid = parsed.hostname.replace(/^www\./i, "") === host
+        && /^\/festival\/\d+(?:\/|$)/.test(parsed.pathname);
+      if (!valid || seen.has(url)) return false;
+      seen.add(url);
+      return true;
+    });
+    const offset = Math.max(0, Math.trunc(options.offset ?? 0));
+    const limit = Math.max(0, Math.trunc(options.limit ?? 8));
+    return details.slice(offset, offset + limit);
+  }
+  return selectOpportunityLinks(linkRecords ?? [], { ...options, sourceUrl });
 }

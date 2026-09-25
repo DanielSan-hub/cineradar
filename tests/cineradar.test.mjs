@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 
 import {
@@ -7,6 +8,22 @@ import {
   normalizeOpportunityQuery,
   parseBoundedInteger,
 } from "../lib/opportunity-pagination.mjs";
+import {
+  alignOpportunityPayload,
+  reviewRequiredForAutomatedIngest,
+} from "../lib/ingest-payload.mjs";
+import { isAuthorizedTeamEmail } from "../lib/team-authorization.mjs";
+import {
+  budgetMode,
+  estimateCloudflareUsage,
+  estimateExaReservation,
+  estimateExaSearch,
+  estimateMessageTokens,
+  limitsForBudget,
+  projectConfiguredMonthlyCost,
+} from "../scripts/cineradar/cost-control.mjs";
+import { admitDiscoveryCandidates } from "../scripts/cineradar/discovery-candidates.mjs";
+import { deterministicPageExtraction } from "../scripts/cineradar/deterministic-extractor.mjs";
 import { parseExtractionPayload } from "../scripts/cineradar/llm.mjs";
 import {
   applyUrlValidations,
@@ -14,15 +31,29 @@ import {
   normalizeDeadline,
   normalizeOpportunity,
 } from "../scripts/cineradar/normalization.mjs";
-import { buildDiscoveryQueries } from "../scripts/cineradar/queries.mjs";
+import {
+  buildDiscoveryQueries,
+  selectDiscoveryQueryDescriptors,
+} from "../scripts/cineradar/queries.mjs";
 import { sourceCatalog } from "../scripts/cineradar/source-catalog.mjs";
+import { parseSupabasePayload } from "../scripts/cineradar/supabase.mjs";
+import {
+  advanceSourceCheckpoint,
+  buildNextSourceRequestUrl,
+  selectDueSources,
+} from "../scripts/cineradar/source-registry.mjs";
 import {
   createRunMetrics,
   incrementMetric,
   recordRejection,
   summarizeMetrics,
 } from "../scripts/cineradar/telemetry.mjs";
-import { canonicalizeUrl, validateUrl } from "../scripts/cineradar/web-validation.mjs";
+import {
+  canonicalizeUrl,
+  selectOpportunityLinks,
+  selectSourceOpportunityLinks,
+  validateUrl,
+} from "../scripts/cineradar/web-validation.mjs";
 
 function response(status, { location, url, text = "a".repeat(100) } = {}) {
   return {
@@ -37,6 +68,26 @@ function response(status, { location, url, text = "a".repeat(100) } = {}) {
 const sourceUrl = "https://source.test/call";
 const officialUrl = "https://official.test/festival";
 const applicationUrl = "https://apply.test/entry";
+
+test("team access requires an explicitly allowlisted exact email", () => {
+  assert.equal(isAuthorizedTeamEmail("reviewer@example.com", undefined), false);
+  assert.equal(isAuthorizedTeamEmail("reviewer@example.com", ""), false);
+  assert.equal(isAuthorizedTeamEmail("reviewer@example.com", " other@example.com, REVIEWER@example.com "), true);
+  assert.equal(isAuthorizedTeamEmail("reviewer@example.com.evil", "reviewer@example.com"), false);
+  assert.equal(isAuthorizedTeamEmail("reviewer@example.com", "reviewer@example.com.evil"), false);
+  assert.equal(isAuthorizedTeamEmail("", "reviewer@example.com"), false);
+  assert.equal(isAuthorizedTeamEmail("reviewer@example.com", "reviewer"), false);
+});
+
+test("Supabase minimal writes may return an empty 200 or 201 response", async () => {
+  assert.equal(await parseSupabasePayload(new Response("", { status: 200 })), null);
+  assert.equal(await parseSupabasePayload(new Response("", { status: 201 })), null);
+  assert.equal(await parseSupabasePayload(new Response(null, { status: 204 })), null);
+  assert.deepEqual(
+    await parseSupabasePayload(new Response('{"id":"stored"}', { status: 201 })),
+    { id: "stored" },
+  );
+});
 
 function rawOpportunity(overrides = {}) {
   return {
@@ -198,10 +249,34 @@ test("8. dedupe keeps different festivals from the same organizer separate", () 
   assert.equal(dedupeOpportunities([first, second]).length, 2);
 });
 
-test("9. Athens, Greece is a stable discovery anchor and not conflated by identity", () => {
-  const queries = buildDiscoveryQueries(new Date("2026-09-22T00:00:00Z"));
-  assert.ok(queries.some((query) => /Athens Greece film festival/i.test(query)));
-  assert.ok(queries.some((query) => /Athens International Digital Film Festival/i.test(query)));
+test("9. daily discovery is stratified and Athens identities remain separate", () => {
+  const plan = selectDiscoveryQueryDescriptors(24, new Date("2026-09-22T00:00:00Z"));
+  assert.equal(plan.length, 24);
+  assert.equal(new Set(plan.map((item) => item.id)).size, 24);
+  for (const family of [
+    "ai-generative",
+    "short-general",
+    "animation",
+    "music-video",
+    "experimental-new-media",
+    "grants",
+    "residencies",
+    "labs-fellowships",
+    "platform-challenges",
+    "branded-open-calls",
+  ]) {
+    assert.ok(plan.some((item) => item.family === family), `missing family ${family}`);
+  }
+  for (const region of [
+    "europe",
+    "usa-canada",
+    "asia",
+    "middle-east",
+    "oceania",
+    "latin-america",
+  ]) {
+    assert.ok(plan.some((item) => item.region === region), `missing region ${region}`);
+  }
   assert.ok(sourceCatalog.some((source) => source.url === "https://en.aiff.gr/"));
   assert.ok(sourceCatalog.some((source) => /athensfilmfest\.org/.test(source.url)));
   assert.ok(sourceCatalog.some((source) => /athensfilm\.com/.test(source.url)));
@@ -212,6 +287,172 @@ test("9. Athens, Greece is a stable discovery anchor and not conflated by identi
     context({ sourceText: "Grounded Film Festival is presented by Grounded Arts in Athens, Ohio." }),
   );
   assert.equal(dedupeOpportunities([greece, ohio]).length, 2);
+});
+
+test("reduced-budget query plans rotate category and geography coverage", () => {
+  const partialPlans = Array.from({ length: 10 }, (_, day) =>
+    selectDiscoveryQueryDescriptors(
+      12,
+      new Date(Date.UTC(2026, 8, 22 + day)),
+    ),
+  ).flat();
+  for (const family of [
+    "ai-generative",
+    "short-general",
+    "animation",
+    "music-video",
+    "experimental-new-media",
+    "grants",
+    "residencies",
+    "labs-fellowships",
+    "platform-challenges",
+    "branded-open-calls",
+  ]) {
+    assert.ok(partialPlans.some((item) => item.family === family));
+  }
+  for (const region of [
+    "europe",
+    "usa-canada",
+    "asia",
+    "middle-east",
+    "oceania",
+    "latin-america",
+  ]) {
+    assert.ok(partialPlans.some((item) => item.region === region));
+  }
+});
+
+test("known-source child links rotate while preserving a hard page bound", () => {
+  const links = Array.from({ length: 5 }, (_, index) => ({
+    url: `https://festival.test/apply-${index}`,
+    text: `Apply to call ${index}`,
+  }));
+  const first = selectOpportunityLinks(links, {
+    sourceUrl: "https://festival.test/",
+    limit: 2,
+    offset: 0,
+  });
+  const second = selectOpportunityLinks(links, {
+    sourceUrl: "https://festival.test/",
+    limit: 2,
+    offset: 2,
+  });
+  assert.equal(first.length, 2);
+  assert.equal(second.length, 2);
+  assert.notDeepEqual(first.map((item) => item.url), second.map((item) => item.url));
+});
+
+test("generic open-call directories never become a deterministic opportunity", () => {
+  const page = {
+    finalUrl: "https://arts.test/open-calls",
+    html: "<h1>Open Calls</h1>",
+    text: "Open Calls Apply to a film festival by 2026-10-20.",
+    linkRecords: [{ url: "https://arts.test/apply", text: "Apply" }],
+  };
+  const result = deterministicPageExtraction(page, { sourceType: "official" });
+  assert.equal(result.disposition, "ambiguous");
+  assert.equal(result.records.length, 0);
+});
+
+test("generic collection headings are not extracted as single opportunities", () => {
+  for (const { title, finalUrl } of [
+    { title: "Festival Submissions & Deadlines 2026", finalUrl: "https://arts.test/festival-deadlines" },
+    { title: "Festival List", finalUrl: "https://festhome.com/festivals" },
+    { title: "Get funding and support", finalUrl: "https://www.bfi.org.uk/get-funding-support" },
+  ]) {
+    const result = deterministicPageExtraction({
+      finalUrl,
+      html: `<h1>${title}</h1>`,
+      text: `${title}. Applications open. Deadline 2026-11-30.`,
+      linkRecords: [{ url: `${finalUrl}/apply`, text: "Apply" }],
+    }, { sourceType: "official" });
+    assert.equal(result.disposition, "ambiguous", title);
+    assert.equal(result.reason, "NO_STRONG_TITLE_SIGNAL", title);
+    assert.deepEqual(result.records, [], title);
+  }
+});
+
+test("specific festival detail heading still extracts an opportunity", () => {
+  const result = deterministicPageExtraction({
+    finalUrl: "https://arts.test/aurora-festival",
+    html: "<h1>Aurora Short Film Festival 2026</h1>",
+    text: "Applications open. Deadline 2026-11-30.",
+    linkRecords: [{ url: "https://arts.test/aurora-festival/apply", text: "Apply" }],
+  }, { sourceType: "official" });
+  assert.equal(result.disposition, "complete");
+  assert.equal(result.records[0].title, "Aurora Short Film Festival 2026");
+  assert.equal(result.records[0].deadline, "2026-11-30");
+});
+
+test("deterministic extraction recognizes multilingual calls, application links, and deadlines", () => {
+  const cases = [
+    { title: "Appel à projets cinéma 2027", deadline: "date limite", application: "candidature" },
+    { title: "Edital audiovisual 2027", deadline: "prazo", application: "inscrições" },
+    { title: "映像公募 2027", deadline: "締切", application: "応募" },
+    { title: "미디어아트 공모 2027", deadline: "마감", application: "신청" },
+    { title: "影像艺术征集 2027", deadline: "截止", application: "提交" },
+    { title: "دعوة أفلام 2027", deadline: "آخر موعد", application: "التقديم" },
+  ];
+  for (const [index, item] of cases.entries()) {
+    const finalUrl = `https://arts.test/call-${index}`;
+    const applicationUrl = `https://arts.test/apply-${index}`;
+    const result = deterministicPageExtraction({
+      finalUrl,
+      html: `<h1>${item.title}</h1>`,
+      text: `${item.deadline} 2027-05-30`,
+      linkRecords: [{ url: applicationUrl, text: item.application }],
+    }, { sourceType: "official" });
+    assert.equal(result.disposition, "complete", item.title);
+    assert.equal(result.records[0].application_url, applicationUrl, item.title);
+    assert.equal(result.records[0].deadline, "2027-05-30", item.title);
+    assert.equal(result.records[0].deadline_source_url, finalUrl, item.title);
+  }
+});
+
+test("Festhome detail URLs are monitored despite generic link labels", () => {
+  const links = [
+    { url: "https://festhome.com/en/festivals", text: "English" },
+    { url: "https://festhome.com/festival/10629", text: "Open in new window" },
+    { url: "https://festhome.com/festival/9509", text: "Open in new window" },
+  ];
+  const first = selectSourceOpportunityLinks(
+    { url: "https://festhome.com/festivals", source_family: "structured-festival" },
+    links,
+    { sourceUrl: "https://festhome.com/festivals", limit: 1, offset: 0 },
+  );
+  const second = selectSourceOpportunityLinks(
+    { url: "https://festhome.com/festivals", source_family: "structured-festival" },
+    links,
+    { sourceUrl: "https://festhome.com/festivals", limit: 1, offset: 1 },
+  );
+  assert.equal(first[0].url, "https://festhome.com/festival/10629");
+  assert.equal(second[0].url, "https://festhome.com/festival/9509");
+});
+
+test("incremental page cursor advances, caps depth, and never restarts daily", () => {
+  const source = {
+    url: "https://directory.test/calls",
+    adapter: "page",
+    adapter_config: { page_param: "page", page_base: 0, max_pages: 3 },
+  };
+  const initial = { cursor_kind: "page", page_number: 1, request_count: 0 };
+  assert.equal(buildNextSourceRequestUrl(source, initial), "https://directory.test/calls?page=0");
+  const second = advanceSourceCheckpoint(initial, { hasMore: true }, { maxPageNumber: 3 });
+  assert.equal(buildNextSourceRequestUrl(source, second), "https://directory.test/calls?page=1");
+  const third = advanceSourceCheckpoint(second, { hasMore: true }, { maxPageNumber: 3 });
+  const wrapped = advanceSourceCheckpoint(third, { hasMore: true }, { maxPageNumber: 3 });
+  assert.equal(wrapped.page_number, 1);
+  assert.equal(wrapped.cycle_count, 1);
+  assert.equal(wrapped.request_count, 3);
+});
+
+test("old overdue sources remain eligible ahead of newer high-priority sources", () => {
+  const now = new Date("2026-09-24T12:00:00Z");
+  const sources = [
+    { id: "new", enabled: true, priority: 1, next_check_at: "2026-09-24T11:00:00Z" },
+    { id: "old", enabled: true, priority: 5, next_check_at: "2026-09-20T11:00:00Z" },
+  ];
+  assert.deepEqual(selectDueSources(sources, { now, limit: 1 }).map((item) => item.id), ["old"]);
 });
 
 test("10. Supabase page parameters can retrieve successive pages beyond eight", () => {
@@ -263,4 +504,177 @@ test("observability counters and rejection reasons are exact", () => {
   assert.equal(summary.fetched, 10);
   assert.equal(summary.rejected, 2);
   assert.deepEqual(summary.rejection_reasons, { FETCH_FAILED: 2 });
+});
+
+test("bulk ingest objects always have identical keys", () => {
+  const base = {
+    slug: "grounded-film-festival-2027",
+    title: "Grounded Film Festival 2027",
+    organizer: "Grounded Arts",
+    category: "Traditional festival",
+    source_url: "https://source.test/2027",
+    canonical_key: "canonical-2027",
+  };
+  const fresh = { ...base, deadline: null };
+  const legacyExisting = {
+    ...base,
+    slug: "grounded-film-festival-2026",
+    source_url: "https://source.test/2026",
+    canonical_key: "canonical-2026",
+    verified_at: "2026-09-22T12:00:00.000Z",
+    featured: true,
+    content_hash: "abc123",
+  };
+  const payload = alignOpportunityPayload([fresh, legacyExisting], {
+    integrity: true,
+    now: "2026-09-23T00:00:00.000Z",
+  });
+
+  assert.deepEqual(Object.keys(payload[0]), Object.keys(payload[1]));
+  assert.ok(Object.values(payload[0]).every((value) => value !== undefined));
+  assert.equal(payload[0].verified_at, null);
+  assert.equal(payload[1].featured, true);
+  assert.equal(payload[0].discovered_at, "2026-09-23T00:00:00.000Z");
+});
+
+test("new automated leads stay review-gated before temporal status claims", () => {
+  const base = {
+    slug: "festival-submissions-2026",
+    title: "Festival Submissions 2026",
+    organizer: "Unknown organizer",
+    category: "Traditional festival",
+    source_url: "https://source.test/submissions",
+    canonical_key: "canonical-submissions-2026",
+    status: "discovered",
+  };
+  const [newLead, approved] = alignOpportunityPayload([
+    base,
+    { ...base, canonical_key: "canonical-approved-2026", review_required: false },
+  ], { integrity: true, reviewGate: true });
+  assert.equal(newLead.status, "discovered");
+  assert.equal(newLead.review_required, true);
+  assert.equal(approved.review_required, false);
+  assert.equal(reviewRequiredForAutomatedIngest(null), true);
+  assert.equal(reviewRequiredForAutomatedIngest({
+    status: "closed", review_required: false, verified_at: null,
+  }), true);
+  assert.equal(reviewRequiredForAutomatedIngest({
+    status: "open", review_required: false, verified_at: "2026-09-25T00:00:00Z",
+  }), false);
+});
+
+test("cost estimates and budget thresholds are conservative and exact", () => {
+  const cloudflare = estimateCloudflareUsage({
+    inputTokens: 1_000_000,
+    outputTokens: 1_000_000,
+  });
+  assert.equal(cloudflare.cost_usd, 0.429);
+  assert.equal(cloudflare.neurons, 38_987);
+  assert.equal(estimateExaSearch().cost_usd, 0.007);
+  assert.equal(estimateExaReservation().cost_usd, 0.01);
+  assert.equal(budgetMode(2.99, 5), "normal");
+  assert.equal(budgetMode(3, 5), "conserve");
+  assert.equal(budgetMode(4, 5), "essential-only");
+  assert.equal(budgetMode(5, 5), "stopped");
+  assert.deepEqual(
+    limitsForBudget("conserve", { queryLimit: 24, resultLimit: 8, llmLimit: 80 }),
+    { queryLimit: 2, resultLimit: 4, llmLimit: 12 },
+  );
+  assert.deepEqual(
+    limitsForBudget("essential-only", { queryLimit: 24, resultLimit: 8, llmLimit: 80 }),
+    { queryLimit: 0, resultLimit: 1, llmLimit: 4 },
+  );
+  const multilingual = [{ role: "user", content: "film æ˜ ç”» Ù…Ù†Ø­Ø©" }];
+  assert.equal(
+    estimateMessageTokens(multilingual),
+    Buffer.byteLength(JSON.stringify(multilingual), "utf8"),
+  );
+  const projected = projectConfiguredMonthlyCost({ days: 30, multiplier: 5 });
+  assert.ok(projected.gross_demand_eur > 5);
+  assert.equal(projected.enforced_max_eur, 5);
+});
+
+test("fair candidate admission gives every query a result before later ranks", () => {
+  const queries = selectDiscoveryQueryDescriptors(24, new Date("2026-09-22T00:00:00Z"));
+  const batches = queries.map((query, queryIndex) => ({
+    query,
+    results: Array.from({ length: 8 }, (_, rank) => ({
+      url: `https://host-${queryIndex}.test/call-${rank}`,
+      title: `Call ${queryIndex}-${rank}`,
+    })),
+  }));
+  const candidates = admitDiscoveryCandidates(batches, {
+    limit: 80,
+    perHostLimit: 8,
+    observedAt: "2026-09-23T00:00:00.000Z",
+  });
+  assert.equal(candidates.length, 80);
+  assert.equal(
+    new Set(candidates.slice(0, 24).map((candidate) => candidate.provenance[0].queryId)).size,
+    24,
+  );
+});
+
+test("named audit misses are regression-only and survive the normal admission path", () => {
+  const plan = selectDiscoveryQueryDescriptors(24, new Date("2026-09-22T00:00:00Z"));
+  const forbiddenNames = [
+    "SXSW",
+    "Sundance",
+    "TorinoFilmLab",
+    "EMAP",
+    "HKAIIFF",
+    "DANA Dubai",
+    "Flickerfest",
+    "ECAMC",
+    "IMCINE",
+  ];
+  for (const name of forbiddenNames) {
+    assert.ok(!plan.some((item) => item.text.toLowerCase().includes(name.toLowerCase())));
+  }
+  const regressionUrls = [
+    "https://sxsw.com/film-submissions/",
+    "https://www.sundance.org/deadlines",
+    "https://www.torinofilmlab.it/labs/featurelab/featurelab-2027",
+    "https://call.emare.eu/",
+    "https://www.hkaiiff.org/en",
+    "https://www.danafilmfestival.com/submit",
+    "https://flickerfest.com.au/entries/",
+    "https://convocatorias.imcine.gob.mx/ecamc/",
+  ];
+  const batches = plan.map((query, index) => ({
+    query,
+    results: index < regressionUrls.length ? [{ url: regressionUrls[index] }] : [],
+  }));
+  const admitted = admitDiscoveryCandidates(batches, { limit: 80 });
+  assert.deepEqual(
+    new Set(admitted.map((item) => item.url)),
+    new Set(regressionUrls),
+  );
+});
+
+test("multilingual discovery strings remain valid UTF-8", () => {
+  const queries = buildDiscoveryQueries(new Date("2026-09-22T00:00:00Z"));
+  const joined = queries.join("\n");
+  for (const expected of ["inscrições", "México", "日本", "한국", "亚洲", "مهرجان"]) {
+    assert.ok(joined.includes(expected), `missing ${expected}`);
+  }
+  assert.doesNotMatch(joined, /Ã.|Î.|å‹|ì¶|Ù…/);
+});
+
+test("scheduled workflow ceilings stay below 2,000 private-runner minutes", async () => {
+  const workflowFiles = [
+    ".github/workflows/discovery.yml",
+    ".github/workflows/monitor.yml",
+    ".github/workflows/revalidate.yml",
+    ".github/workflows/stale.yml",
+  ];
+  const contents = await Promise.all(workflowFiles.map((file) => readFile(file, "utf8")));
+  assert.match(contents[0], /cron: "17 6 \* \* \*"/);
+  assert.match(contents[1], /cron: "43 0,12 \* \* \*"/);
+  assert.match(contents[2], /cron: "13 3 \* \* 0"/);
+  assert.match(contents[3], /cron: "37 4 1 \* \*"/);
+  assert.ok(contents.every((content) => /group: cineradar-pipeline/.test(content)));
+  const worstCaseMinutes = 31 * 20 + 62 * 10 + 5 * 15 + 10;
+  assert.equal(worstCaseMinutes, 1325);
+  assert.ok(worstCaseMinutes < 2000);
 });

@@ -1,16 +1,16 @@
-name: CineRadar source monitor
+name: CineRadar stale review
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: "43 0,12 * * *"
+    - cron: "37 4 1 * *"
 
 concurrency:
   group: cineradar-pipeline
   cancel-in-progress: false
 
 jobs:
-  monitor:
+  stale:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -20,11 +20,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Refresh known sources with HTTP and hashes only
-        run: node scripts/cineradar/monitor.mjs
+      - name: Report stale records without LLM or auto-closing
+        run: node scripts/cineradar/stale-check.mjs
         env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          HTTP_TIMEOUT_MS: "12000"
-          MONITOR_LINK_LIMIT: "2"
-          SOURCE_REFRESH_LIMIT: "40"
+          STALE_CHECK_LIMIT: "1000"

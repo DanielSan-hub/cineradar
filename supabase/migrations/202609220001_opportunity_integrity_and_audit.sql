@@ -23,6 +23,32 @@ alter table public.opportunities
   add column if not exists deadline_source_url text,
   add column if not exists deadline_last_verified_at timestamptz;
 
+-- Recover keys already produced by the application while it was operating on
+-- the legacy schema. Only keys that are unique in the existing dataset are
+-- backfilled here; the JS backfill command reports and handles older rows that
+-- require the exact application normalization algorithm.
+with recovered as (
+  select
+    id,
+    coalesce(
+      nullif(raw_payload->>'canonical_key', ''),
+      nullif(raw_payload#>>'{normalization,canonical_key}', '')
+    ) as canonical_key
+  from public.opportunities
+  where canonical_key is null
+), unique_recovered as (
+  select canonical_key
+  from recovered
+  where canonical_key is not null
+  group by canonical_key
+  having count(*) = 1
+)
+update public.opportunities as opportunity
+set canonical_key = recovered.canonical_key
+from recovered
+join unique_recovered using (canonical_key)
+where opportunity.id = recovered.id;
+
 -- Existing deadlines remain unknown until a verifier records supporting evidence.
 update public.opportunities
 set source_url_status = coalesce(source_url_status, 'unchecked'),

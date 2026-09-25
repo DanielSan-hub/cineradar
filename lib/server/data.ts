@@ -2,6 +2,11 @@ import "server-only";
 
 import { demoOpportunities, demoPipelineHealth } from "@/lib/demo-data";
 import {
+  alignOpportunityPayload,
+  INTEGRITY_OPPORTUNITY_FIELDS,
+  reviewRequiredForAutomatedIngest,
+} from "@/lib/ingest-payload.mjs";
+import {
   buildOpportunitiesSearchParams,
   normalizeOpportunityQuery,
 } from "@/lib/opportunity-pagination.mjs";
@@ -17,25 +22,9 @@ const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const publishedStatuses = new Set(["verified", "open", "closing-soon", "closed"]);
-const legacyOpportunityFields = new Set([
-  "slug", "title", "organizer", "category", "status", "ai_policy",
-  "deadline", "opens_at", "prize_amount", "prize_currency",
-  "entry_fee_amount", "entry_fee_currency", "location", "remote",
-  "max_runtime_minutes", "source_url", "official_url", "source_type",
-  "confidence", "summary", "eligibility", "formats", "tags",
-  "discovered_at", "verified_at", "featured", "content_hash", "raw_payload",
-]);
-const integrityOpportunityFields = new Set([
-  "canonical_key", "edition_year", "application_url", "deadline_status",
-  "deadline_source_url", "deadline_last_verified_at",
-  "source_url_status", "source_url_http_status", "source_url_final",
-  "source_url_last_checked_at", "source_url_verified_at",
-  "official_url_status", "official_url_http_status", "official_url_final",
-  "official_url_last_checked_at", "official_url_verified_at",
-  "application_url_status", "application_url_http_status", "application_url_final",
-  "application_url_last_checked_at", "application_url_verified_at",
-]);
+const integrityOpportunityFields = new Set(INTEGRITY_OPPORTUNITY_FIELDS);
 let integritySchemaSupport: Promise<boolean> | undefined;
+let temporalReviewSupport: Promise<boolean> | undefined;
 
 export const DEFAULT_OPPORTUNITIES_PAGE_SIZE = 24;
 export const MAX_OPPORTUNITIES_PAGE_SIZE = 50;
@@ -209,6 +198,10 @@ export function mapOpportunityRecord(record: JsonRecord): Opportunity {
     tags: (record.tags as string[]) ?? [],
     discoveredAt: String(record.discovered_at),
     verifiedAt,
+    reviewRequired: Boolean(record.review_required),
+    hasConflict: Boolean(record.has_conflict),
+    previousStatus: nullableString(record.previous_status) as Opportunity["previousStatus"],
+    previousDeadline: nullableString(record.previous_deadline),
     featured: Boolean(record.featured),
   };
 }
@@ -235,6 +228,20 @@ async function supabaseRequest(
     throw new Error(`Supabase ${response.status}: ${await response.text()}`);
   }
   return response;
+}
+
+async function supportsTemporalReview() {
+  temporalReviewSupport ??= supabaseRequest(
+    "opportunities?select=review_required&limit=1",
+    SUPABASE_SERVICE_ROLE_KEY,
+  ).then(() => true).catch((error: unknown) => {
+    if (/Supabase 400:.*(?:review_required|PGRST204|42703)/i.test(String(error))) {
+      return false;
+    }
+    temporalReviewSupport = undefined;
+    throw error;
+  });
+  return temporalReviewSupport;
 }
 
 function clampPageOptions(options?: OpportunityPageOptions) {
@@ -385,9 +392,12 @@ export async function getReviewQueue(
   }
 
   try {
+    const temporal = await supportsTemporalReview();
     const query = new URLSearchParams({
       select: "*",
-      status: "in.(signal,discovered)",
+      ...(temporal
+        ? { or: "(status.in.(signal,discovered),review_required.eq.true)" }
+        : { status: "in.(signal,discovered)" }),
       order: "discovered_at.desc,id.asc",
       limit: String(limit),
       offset: String(offset),
@@ -415,6 +425,7 @@ export async function getReviewQueue(
 export async function getPipelineHealth(): Promise<PipelineHealth> {
   if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return demoPipelineHealth;
   try {
+    const temporal = await supportsTemporalReview();
     const [runsResponse, sourceResponse, openResponse, leadResponse] =
       await Promise.all([
         supabaseRequest(
@@ -427,7 +438,9 @@ export async function getPipelineHealth(): Promise<PipelineHealth> {
           SUPABASE_SERVICE_ROLE_KEY,
         ),
         supabaseRequest(
-          "opportunities?select=id&status=in.(signal,discovered)",
+          temporal
+            ? "opportunities?select=id&or=(status.in.(signal,discovered),review_required.eq.true)"
+            : "opportunities?select=id&status=in.(signal,discovered)",
           SUPABASE_SERVICE_ROLE_KEY,
         ),
       ]);
@@ -436,7 +449,9 @@ export async function getPipelineHealth(): Promise<PipelineHealth> {
       finished_at: string;
     }>;
     const lastDiscovery = runs.find((run) => run.kind === "discovery");
-    const lastMonitor = runs.find((run) => run.kind === "monitor");
+    const lastMonitor = runs.find((run) =>
+      run.kind === "monitor" || run.kind === "refresh",
+    );
     return {
       lastDiscoveryAt: lastDiscovery?.finished_at ?? null,
       lastMonitorAt: lastMonitor?.finished_at ?? null,
@@ -465,18 +480,10 @@ export async function upsertOpportunities(records: JsonRecord[]) {
   integritySchemaSupport ??= supabaseRequest(
     "opportunities?select=canonical_key&limit=1",
     SUPABASE_SERVICE_ROLE_KEY,
-  ).then(
-    () => true,
-    (error: unknown) => {
-      if (error instanceof Error && /Supabase 400:/.test(error.message)) return false;
-      throw error;
-    },
-  );
+  ).then(() => true);
   const integrity = await integritySchemaSupport;
+  const reviewGate = await supportsTemporalReview();
   const conflictField = integrity ? "canonical_key" : "source_url";
-  const allowed = integrity
-    ? new Set([...legacyOpportunityFields, ...integrityOpportunityFields])
-    : legacyOpportunityFields;
   const collapsed = integrity
     ? records
     : [...new Map(records.map((record) => [String(record.source_url), record])).values()];
@@ -497,7 +504,7 @@ export async function upsertOpportunities(records: JsonRecord[]) {
     existing.push(...((await existingResponse.json()) as JsonRecord[]));
   }
   const existingByKey = new Map(existing.map((record) => [record[conflictField], record]));
-  const prepared = collapsed.map((incoming) => {
+  const mergedRecords = collapsed.map((incoming) => {
     const previous = existingByKey.get(incoming[conflictField]);
     const incomingCanonical = incoming.canonical_key ?? asRecord(incoming.raw_payload).canonical_key;
     const previousCanonical = previous?.canonical_key ?? asRecord(previous?.raw_payload).canonical_key;
@@ -520,6 +527,11 @@ export async function upsertOpportunities(records: JsonRecord[]) {
       if (previous.verified_at) merged.verified_at = previous.verified_at;
       if (previous.featured) merged.featured = true;
     }
+    if (reviewGate) {
+      merged.review_required = reviewRequiredForAutomatedIngest(
+        differentLegacyEntity ? null : previous,
+      );
+    }
     if (!integrity) {
       const integrityPayload = Object.fromEntries(
         [...integrityOpportunityFields]
@@ -532,10 +544,9 @@ export async function upsertOpportunities(records: JsonRecord[]) {
         integrity_schema_pending: true,
       };
     }
-    return Object.fromEntries(
-      Object.entries(merged).filter(([key, value]) => allowed.has(key) && value !== undefined),
-    );
+    return merged;
   });
+  const prepared = alignOpportunityPayload(mergedRecords, { integrity, reviewGate });
   const response = await supabaseRequest(
     `opportunities?on_conflict=${conflictField}`,
     SUPABASE_SERVICE_ROLE_KEY,

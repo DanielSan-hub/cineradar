@@ -1,4 +1,5 @@
 import { config } from "./config.mjs";
+import { deterministicPageExtraction } from "./deterministic-extractor.mjs";
 import { mapPool } from "./http.mjs";
 import { extractOpportunities } from "./llm.mjs";
 import {
@@ -57,19 +58,41 @@ export async function processFetchedPage({
   title,
   sourceType,
   metrics,
+  runId = null,
+  operation = "extract",
+  contentHash = null,
   fetchImpl = fetch,
+  claimLlmCall = () => true,
 }) {
   let rawItems;
   try {
-    rawItems = await extractOpportunities({
-      url: page.finalUrl,
-      title,
-      text: page.text,
-      links: page.links,
-    });
+    const deterministic = deterministicPageExtraction(page, { sourceType });
+    if (deterministic.disposition === "complete") {
+      rawItems = deterministic.records;
+      incrementMetric(metrics, "deterministic", rawItems.length);
+    } else {
+      if (!claimLlmCall()) {
+        const error = new Error("LLM run limit reached; deterministic extraction was ambiguous");
+        error.code = "LLM_RUN_LIMIT";
+        throw error;
+      }
+      incrementMetric(metrics, "llm_calls");
+      rawItems = await extractOpportunities({
+        url: page.finalUrl,
+        title,
+        text: page.text,
+        links: page.links,
+        runId,
+        operation,
+        contentHash,
+      });
+    }
   } catch (error) {
-    recordRejection(metrics, "PARSING_ERROR");
+    const code = error.code ?? "PARSING_ERROR";
+    recordRejection(metrics, code);
     const wrapped = new Error(`PARSING_ERROR: ${error.message}`);
+    wrapped.code = code;
+    wrapped.metricsRecorded = true;
     wrapped.cause = error;
     throw wrapped;
   }

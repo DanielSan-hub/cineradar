@@ -1,18 +1,18 @@
-name: CineRadar source monitor
+name: CineRadar historical backfill
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: "43 0,12 * * *"
+    - cron: "53 5 2 * *"
 
 concurrency:
   group: cineradar-pipeline
   cancel-in-progress: false
 
 jobs:
-  monitor:
+  history:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     permissions:
       contents: read
     steps:
@@ -20,11 +20,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Refresh known sources with HTTP and hashes only
-        run: node scripts/cineradar/monitor.mjs
+      - name: Backfill evidence from 2023 with bounded direct HTTP
+        run: node scripts/cineradar/history-backfill.mjs
         env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           HTTP_TIMEOUT_MS: "12000"
-          MONITOR_LINK_LIMIT: "2"
-          SOURCE_REFRESH_LIMIT: "40"
+          HISTORICAL_PAGE_LIMIT: "10"

@@ -1,5 +1,7 @@
 import { headers } from "next/headers";
-import { redirect } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
+
+import { isAuthorizedTeamEmail } from "@/lib/team-authorization.mjs";
 
 export type ChatGPTUser = {
   userId: string;
@@ -46,6 +48,14 @@ export async function requireChatGPTUser(
   if (user) return user;
 
   redirect(chatGPTSignInPath(returnTo));
+}
+
+export async function requireTeamUser(returnTo: string): Promise<ChatGPTUser> {
+  const user = await requireChatGPTUser(returnTo);
+  if (!isAuthorizedTeamEmail(user.email, process.env.CINERADAR_TEAM_EMAILS)) {
+    notFound();
+  }
+  return user;
 }
 
 export function chatGPTSignInPath(returnTo: string): string {

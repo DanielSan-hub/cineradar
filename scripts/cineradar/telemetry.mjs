@@ -2,6 +2,8 @@ const COUNTERS = [
   "queries",
   "discovered",
   "fetched",
+  "deterministic",
+  "llm_calls",
   "parsed",
   "normalized",
   "validated",

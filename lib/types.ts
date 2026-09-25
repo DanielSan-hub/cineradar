@@ -68,6 +68,10 @@ export type Opportunity = {
   tags: string[];
   discoveredAt: string;
   verifiedAt: string | null;
+  reviewRequired?: boolean;
+  hasConflict?: boolean;
+  previousStatus?: OpportunityStatus | null;
+  previousDeadline?: string | null;
   featured?: boolean;
   demo?: boolean;
 };

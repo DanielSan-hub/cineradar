@@ -1,5 +1,7 @@
 import { sourceCatalog } from "./source-catalog.mjs";
-import { supabase } from "./supabase.mjs";
+import { assertSourceRegistrySchema, supabase } from "./supabase.mjs";
+
+await assertSourceRegistrySchema();
 
 const result = await supabase("sources?on_conflict=url", {
   method: "POST",

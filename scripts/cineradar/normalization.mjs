@@ -122,8 +122,8 @@ function deadlineMatchesEvidence(deadline, rawValue, quote) {
   if (!deadline || !quote) return false;
   const evidence = cleanText(quote, 500).toLocaleLowerCase();
   const raw = cleanText(String(rawValue ?? ""), 100).toLocaleLowerCase();
-  const describesOpening = /\b(?:submissions?|applications?|entries)\s+(?:open|start)|\bopening\b|\bsubmission start/i.test(evidence);
-  const describesClosing = /\bdeadline\b|\bclose[sd]?\b|\bdue\b|\bfinal\b|\bsubmit by\b|\bapply by\b/i.test(evidence);
+  const describesOpening = /\b(?:submissions?|applications?|entries|inscripciones|inscriç(?:ão|ões)|candidatures)\s+(?:open|start|abren|abertas?)|\bopening\b|\bsubmission start/i.test(evidence);
+  const describesClosing = /\bdeadline\b|\bclose[sd]?\b|\bdue\b|\bfinal\b|\bsubmit by\b|\bapply by\b|fecha límite|cierre|prazo|encerramento|date limite|bewerbungsfrist|موعد نهائي/i.test(evidence);
   if (describesOpening && !describesClosing) return false;
   if (raw && evidence.includes(raw)) return true;
   const date = new Date(deadline);
@@ -268,7 +268,7 @@ export function normalizeOpportunity(raw, context) {
     deadlineStatus = "unknown";
   }
 
-  const positiveOpportunityTitle = /festival|competition|contest|challenge|grant|fund|residen|fellowship|\blab\b|open call|call for|submissions?|entries|award|exhibition|screenplay/i.test(title);
+  const positiveOpportunityTitle = /festival|competition|contest|challenge|grant|fund|residen|fellowship|\blab\b|open call|call for|submissions?|entries|award|exhibition|screenplay|convocatoria|inscripciones|edital|fomento|beca|bando|appel à|einreichung|bewerbung|دعوة|منحة|募集|征集|출품/i.test(title);
   const retrospectiveTitle = /winners?|honou?red|awarded at|recap|programme|program schedule|masterclass|highlights?|closing ceremony|opening ceremony/i.test(title);
   if ((!positiveOpportunityTitle || retrospectiveTitle) && !application.url && !deadline) {
     throw new PipelineRejection("NOT_AN_OPPORTUNITY");
@@ -431,6 +431,21 @@ function mergeArrays(a, b, max = 16) {
   return [...new Set([...(a ?? []), ...(b ?? [])])].slice(0, max);
 }
 
+function mergeProvenance(a, b) {
+  const unique = new Map();
+  for (const entry of [...(a ?? []), ...(b ?? [])]) {
+    const key = [
+      entry.provider,
+      entry.queryId,
+      entry.sourceId,
+      entry.sourceUrl,
+      entry.resultRank,
+    ].join("|");
+    if (!unique.has(key)) unique.set(key, entry);
+  }
+  return [...unique.values()];
+}
+
 function preferredRecord(a, b) {
   const scoreA = Number(a.confidence ?? 0);
   const scoreB = Number(b.confidence ?? 0);
@@ -449,6 +464,7 @@ function preferredRecord(a, b) {
     eligibility: mergeArrays(base.eligibility, other.eligibility, 12),
     formats: mergeArrays(base.formats, other.formats, 12),
     tags: mergeArrays(base.tags, other.tags, 16),
+    _provenance: mergeProvenance(base._provenance, other._provenance),
     raw_payload: {
       ...base.raw_payload,
       additional_source_urls: mergeArrays(

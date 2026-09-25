@@ -12,7 +12,7 @@ import {
   ShieldAlert,
 } from "lucide-react";
 
-import { chatGPTSignOutPath, requireChatGPTUser } from "@/app/chatgpt-auth";
+import { chatGPTSignOutPath, requireTeamUser } from "@/app/chatgpt-auth";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { getPipelineHealth, getReviewQueue } from "@/lib/server/data";
@@ -22,8 +22,8 @@ export const metadata: Metadata = { title: "Team room" };
 export const dynamic = "force-dynamic";
 
 export default async function TeamPage() {
-  const [user, reviewPage, health] = await Promise.all([
-    requireChatGPTUser("/team"),
+  const user = await requireTeamUser("/team");
+  const [reviewPage, health] = await Promise.all([
     getReviewQueue({ limit: 50, offset: 0 }),
     getPipelineHealth(),
   ]);
@@ -82,10 +82,12 @@ export default async function TeamPage() {
                       <div className="flex flex-wrap gap-2">
                         <Badge variant="outline" className={item.status === "signal" ? "border-violet-400/30 bg-violet-400/10 text-violet-200" : "border-sky-400/30 bg-sky-400/10 text-sky-200"}>{item.status}</Badge>
                         <Badge variant="outline" className="border-white/10 bg-white/4 text-slate-400">{Math.round(item.confidence * 100)}% confidence</Badge>
+                        {item.reviewRequired && <Badge variant="outline" className="border-amber-300/40 bg-amber-300/10 text-amber-100">Human review required</Badge>}
                       </div>
                       <h3 className="mt-3 text-lg font-medium text-white">{item.title}</h3>
                       <p className="mt-1 text-sm text-slate-500">{item.organizer} · {item.sourceType}</p>
                       <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-300">{item.summary}</p>
+                      {item.hasConflict && <p className="mt-2 text-sm text-amber-200">Source claims conflict. Check the current and previous status/deadline before publication.</p>}
                     </div>
                     <ReviewLinks opportunity={item} />
                   </div>

@@ -1,7 +1,17 @@
 import { config } from "./config.mjs";
+import {
+  cloudflareTokenUsage,
+  estimateCloudflareUsage,
+  estimateGroqUsage,
+  estimateMessageTokens,
+  finalizeProviderUsage,
+  groqTokenUsage,
+  reserveProviderUsage,
+  usageIdempotencyKey,
+} from "./cost-control.mjs";
 import { fetchWithTimeout } from "./http.mjs";
 
-const SYSTEM_PROMPT = `You extract real opportunities for filmmakers from one fetched web page.
+const SYSTEM_PROMPT = `You extract real opportunities for filmmakers, animators, moving-image and media artists, music-video directors, and AI-video creators from one fetched web page.
 Return only a JSON object with an "opportunities" array (maximum 5 items). Prefer the current, upcoming or rolling call cycle over historical editions. If none are relevant, return {"opportunities":[]}.
 
 Hard rules:
@@ -10,10 +20,11 @@ Hard rules:
 - A listing page may contain several distinct calls: return one item for each, not just the first.
 - An aggregator, article or social page is source_type press/social/community, never official merely because it mentions an event.
 - deadline_status is confirmed only for an explicit published date, estimated only when the page explicitly describes it as approximate, rolling only when explicitly rolling, otherwise unknown.
+- observed_status is open, closing-soon or closed only when the page explicitly states that status for this exact opportunity. Otherwise null. Copy the exact short supporting phrase into status_evidence; do not infer status from a date.
 - Copy short verbatim supporting snippets (maximum 180 characters each) into deadline_evidence and field_evidence. Evidence must occur in PAGE TEXT. Keep summary under 300 characters and each list to at most 8 concise items.
 
 Each array item has this shape:
-{"relevant":boolean,"title":string|null,"canonical_name":string|null,"organizer":string|null,"category":"AI film festival"|"Traditional festival"|"Platform challenge"|"Grant"|"Residency"|"Advertising competition"|null,"ai_policy":"allowed"|"required"|"restricted"|"unclear","deadline":string|null,"deadline_status":"confirmed"|"estimated"|"unknown"|"rolling","deadline_evidence":string|null,"deadline_source_url":string|null,"opens_at":string|null,"prize_amount":number|null,"prize_currency":string|null,"entry_fee_amount":number|null,"entry_fee_currency":string|null,"location":string|null,"remote":boolean,"max_runtime_minutes":number|null,"official_url":string|null,"application_url":string|null,"source_type":"official"|"press"|"social"|"community","confidence":number,"summary":string,"eligibility":string[],"formats":string[],"tags":string[],"opportunity_year":number|null,"edition":string|null,"field_evidence":{"title":string|null,"organizer":string|null,"opens_at":string|null,"prize":string|null,"entry_fee":string|null,"location":string|null,"max_runtime":string|null,"ai_policy":string|null,"eligibility":string|null,"formats":string|null}}`;
+{"relevant":boolean,"title":string|null,"canonical_name":string|null,"organizer":string|null,"category":"AI film festival"|"Traditional festival"|"Platform challenge"|"Grant"|"Residency"|"Advertising competition"|null,"ai_policy":"allowed"|"required"|"restricted"|"unclear","deadline":string|null,"deadline_status":"confirmed"|"estimated"|"unknown"|"rolling","deadline_evidence":string|null,"observed_status":"open"|"closing-soon"|"closed"|null,"status_evidence":string|null,"deadline_source_url":string|null,"opens_at":string|null,"prize_amount":number|null,"prize_currency":string|null,"entry_fee_amount":number|null,"entry_fee_currency":string|null,"location":string|null,"remote":boolean,"max_runtime_minutes":number|null,"official_url":string|null,"application_url":string|null,"source_type":"official"|"press"|"social"|"community","confidence":number,"summary":string,"eligibility":string[],"formats":string[],"tags":string[],"opportunity_year":number|null,"edition":string|null,"field_evidence":{"title":string|null,"organizer":string|null,"opens_at":string|null,"prize":string|null,"entry_fee":string|null,"location":string|null,"max_runtime":string|null,"ai_policy":string|null,"eligibility":string|null,"formats":string|null}}`;
 
 export function parseExtractionPayload(value) {
   let parsed = value;
@@ -68,56 +79,192 @@ export function parseExtractionPayload(value) {
     .slice(0, 5);
 }
 
-async function cloudflare(messages) {
+async function cloudflare(messages, context) {
   if (!config.cloudflareAccountId || !config.cloudflareApiToken) return null;
-  const response = await fetchWithTimeout(
-    `https://api.cloudflare.com/client/v4/accounts/${config.cloudflareAccountId}/ai/run/${config.cloudflareModel}`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${config.cloudflareApiToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        messages,
-        response_format: { type: "json_object" },
-        max_tokens: 4000,
-        temperature: 0,
-      }),
+  const reservedUsage = estimateCloudflareUsage({
+    inputTokens: estimateMessageTokens(messages),
+    outputTokens: 4000,
+  });
+  const reservation = await reserveProviderUsage({
+    idempotencyKey: usageIdempotencyKey([
+      context.runId,
+      "cloudflare",
+      context.operation,
+      context.url,
+      context.contentHash,
+    ]),
+    runId: context.runId,
+    provider: "cloudflare",
+    operation: context.operation,
+    model: config.cloudflareModel,
+    reservedCostEur: reservedUsage.cost_eur,
+    usageUnits: {
+      reserved_input_tokens: reservedUsage.input_tokens,
+      reserved_output_tokens: reservedUsage.output_tokens,
+      reserved_neurons: reservedUsage.neurons,
     },
-    config.llmTimeoutMs,
-  );
-  if (!response.ok) throw new Error(`Cloudflare AI ${response.status}`);
-  const body = await response.json();
-  return body.result?.response ?? body.result?.choices?.[0]?.message?.content ?? null;
+    dailyUsageLimit: config.cloudflareDailyNeuronLimit,
+    metadata: { source_url: context.url },
+  });
+  let finalized = false;
+  try {
+    const response = await fetchWithTimeout(
+      `https://api.cloudflare.com/client/v4/accounts/${config.cloudflareAccountId}/ai/run/${config.cloudflareModel}`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${config.cloudflareApiToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          messages,
+          response_format: { type: "json_object" },
+          max_tokens: 4000,
+          temperature: 0,
+        }),
+      },
+      config.llmTimeoutMs,
+    );
+    const body = await response.json().catch(() => null);
+    if (!response.ok || body?.success !== true || !body?.result) {
+      const error = new Error(`Cloudflare AI ${response.status} invalid response`);
+      error.httpStatus = response.status;
+      throw error;
+    }
+    const tokenUsage = cloudflareTokenUsage(body);
+    if (!tokenUsage.inputTokens && !tokenUsage.outputTokens) {
+      throw new Error("Cloudflare AI response is missing usage counters");
+    }
+    const actualUsage = estimateCloudflareUsage(tokenUsage);
+    const output = body.result.response
+      ?? body.result.choices?.[0]?.message?.content
+      ?? null;
+    if (!output) throw new Error("Cloudflare AI returned an empty extraction");
+    await finalizeProviderUsage(reservation.event_id, {
+      status: "succeeded",
+      usageUnits: actualUsage,
+      estimatedCostEur: actualUsage.cost_eur,
+      providerCost: actualUsage.cost_usd,
+      providerCurrency: "USD",
+      providerRequestId: body.result.request_id ?? response.headers.get("cf-ray"),
+      httpStatus: response.status,
+    });
+    finalized = true;
+    return output;
+  } catch (error) {
+    if (!finalized) {
+      await finalizeProviderUsage(reservation.event_id, {
+        status: "uncertain",
+        usageUnits: {
+          reserved_input_tokens: reservedUsage.input_tokens,
+          reserved_output_tokens: reservedUsage.output_tokens,
+          reserved_neurons: reservedUsage.neurons,
+        },
+        estimatedCostEur: reservedUsage.cost_eur,
+        providerCost: null,
+        providerCurrency: "USD",
+        httpStatus: error.httpStatus ?? null,
+        errorCode: "CLOUDFLARE_REQUEST_UNCERTAIN",
+      });
+    }
+    throw error;
+  }
 }
 
-async function groq(messages) {
+async function groq(messages, context) {
   if (!config.groqApiKey) return null;
-  const response = await fetchWithTimeout(
-    "https://api.groq.com/openai/v1/chat/completions",
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${config.groqApiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: config.groqModel,
-        messages,
-        response_format: { type: "json_object" },
-        max_completion_tokens: 4000,
-        temperature: 0,
-      }),
+  const reservedUsage = estimateGroqUsage({
+    inputTokens: estimateMessageTokens(messages),
+    outputTokens: 4000,
+  });
+  const reservation = await reserveProviderUsage({
+    idempotencyKey: usageIdempotencyKey([
+      context.runId,
+      "groq",
+      context.operation,
+      context.url,
+      context.contentHash,
+    ]),
+    runId: context.runId,
+    provider: "groq",
+    operation: context.operation,
+    model: config.groqModel,
+    reservedCostEur: reservedUsage.cost_eur,
+    usageUnits: {
+      reserved_input_tokens: reservedUsage.input_tokens,
+      reserved_output_tokens: reservedUsage.output_tokens,
     },
-    config.llmTimeoutMs,
-  );
-  if (!response.ok) throw new Error(`Groq ${response.status}: ${await response.text()}`);
-  const body = await response.json();
-  return body.choices?.[0]?.message?.content ?? null;
+    optional: true,
+    metadata: { source_url: context.url },
+  });
+  let finalized = false;
+  try {
+    const response = await fetchWithTimeout(
+      "https://api.groq.com/openai/v1/chat/completions",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${config.groqApiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: config.groqModel,
+          messages,
+          response_format: { type: "json_object" },
+          max_completion_tokens: 4000,
+          temperature: 0,
+        }),
+      },
+      config.llmTimeoutMs,
+    );
+    const body = await response.json().catch(() => null);
+    if (!response.ok || !body) {
+      const error = new Error(`Groq ${response.status}`);
+      error.httpStatus = response.status;
+      throw error;
+    }
+    const tokenUsage = groqTokenUsage(body);
+    const actualUsage = estimateGroqUsage(tokenUsage);
+    const output = body.choices?.[0]?.message?.content ?? null;
+    if (!output) throw new Error("Groq returned an empty extraction");
+    await finalizeProviderUsage(reservation.event_id, {
+      status: "succeeded",
+      usageUnits: actualUsage,
+      estimatedCostEur: actualUsage.cost_eur,
+      providerCost: actualUsage.cost_usd,
+      providerCurrency: "USD",
+      providerRequestId: body.id ?? response.headers.get("x-request-id"),
+      httpStatus: response.status,
+    });
+    finalized = true;
+    return output;
+  } catch (error) {
+    if (!finalized) {
+      await finalizeProviderUsage(reservation.event_id, {
+        status: "uncertain",
+        usageUnits: {
+          reserved_input_tokens: reservedUsage.input_tokens,
+          reserved_output_tokens: reservedUsage.output_tokens,
+        },
+        estimatedCostEur: reservedUsage.cost_eur,
+        providerCurrency: "USD",
+        httpStatus: error.httpStatus ?? null,
+        errorCode: "GROQ_REQUEST_UNCERTAIN",
+      });
+    }
+    throw error;
+  }
 }
 
-export async function extractOpportunities({ url, title, text, links = [] }) {
+export async function extractOpportunities({
+  url,
+  title,
+  text,
+  links = [],
+  runId = null,
+  operation = "extract",
+  contentHash = null,
+}) {
   const allowedLinks = [...new Set([url, ...links])]
     .filter(Boolean)
     .slice(0, 120)
@@ -130,14 +277,36 @@ export async function extractOpportunities({ url, title, text, links = [] }) {
       content: `SOURCE URL: ${url}\nPAGE TITLE: ${title ?? ""}\nALLOWED LINKS:\n${allowedLinks}\n\nPAGE TEXT:\n${String(text ?? "").slice(0, 60_000)}`,
     },
   ];
-  let output;
-  try {
-    output = await cloudflare(messages);
-  } catch (error) {
-    console.warn("Cloudflare extraction failed; trying fallback", error.message);
+  let output = null;
+  const cloudflareConfigured = Boolean(
+    config.cloudflareAccountId && config.cloudflareApiToken,
+  );
+  if (cloudflareConfigured) {
+    // Do not automatically invoke a second paid provider after Cloudflare was
+    // attempted: a timeout or 5xx can occur after billable inference happened.
+    output = await cloudflare(messages, {
+      runId,
+      operation,
+      url,
+      contentHash,
+    });
+  } else if (config.groqFallbackEnabled) {
+    output = await groq(messages, {
+      runId,
+      operation,
+      url,
+      contentHash,
+    });
   }
-  if (!output) output = await groq(messages);
-  if (!output) throw new Error("No LLM provider configured");
+  if (!output) {
+    throw new Error(
+      cloudflareConfigured
+        ? "Cloudflare AI returned no extraction"
+        : config.groqFallbackEnabled
+          ? "Enabled Groq provider returned no extraction"
+          : "No enabled LLM provider configured",
+    );
+  }
   return parseExtractionPayload(output);
 }
 
