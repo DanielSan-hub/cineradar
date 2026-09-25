@@ -259,6 +259,49 @@ test("ambiguous or opening dates are not promoted to deadlines", () => {
   assert.equal(record.deadline_status, "unknown");
 });
 
+test("explicit ordinal English deadlines use the stated CET or CEST offset", () => {
+  const now = new Date("2026-09-25T00:00:00Z");
+  assert.equal(
+    normalizeDeadline("Thursday, 5th November 2026, 4.00 pm CET", { now }),
+    "2026-11-05T15:00:00.000Z",
+  );
+  assert.equal(
+    normalizeDeadline("Monday, 6th July 2026, 4:00 pm CEST", { now }),
+    "2026-07-06T14:00:00.000Z",
+  );
+  assert.equal(
+    normalizeDeadline("5th November 2026, 16:00 CET", { now }),
+    "2026-11-05T15:00:00.000Z",
+  );
+  for (const value of [
+    "Thursday, 5th November 2026, 4.00 pm",
+    "Friday, 5th November 2026, 4.00 pm CET",
+    "Thursday, 5st November 2026, 4.00 pm CET",
+    "Sunday, 31st February 2027, 4.00 pm CET",
+    "Thursday, 5th November 2026, 25:00 CET",
+    "Thursday, 5th November 2026, 4:60 pm CET",
+  ]) {
+    assert.equal(normalizeDeadline(value, { now }), null, value);
+  }
+});
+
+test("a grounded exact CET deadline survives opportunity normalization", () => {
+  const deadline = "Thursday, 5th November 2026, 4.00 pm CET";
+  const quote = `Deadline for applications: ${deadline}.`;
+  const record = normalizeOpportunity(
+    rawOpportunity({
+      deadline,
+      deadline_status: "confirmed",
+      deadline_evidence: quote,
+      deadline_source_url: sourceUrl,
+    }),
+    context({ sourceText: `${context().sourceText} ${quote}` }),
+  );
+  assert.equal(record.deadline, "2026-11-05T15:00:00.000Z");
+  assert.equal(record.deadline_status, "confirmed");
+  assert.equal(record.deadline_source_url, sourceUrl);
+});
+
 test("8. dedupe keeps different festivals from the same organizer separate", () => {
   const first = normalizeOpportunity(rawOpportunity(), context());
   const second = normalizeOpportunity(

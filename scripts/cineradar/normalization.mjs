@@ -90,6 +90,48 @@ function slugify(value) {
     .slice(0, 72);
 }
 
+const ENGLISH_MONTHS = [
+  "january", "february", "march", "april", "may", "june",
+  "july", "august", "september", "october", "november", "december",
+];
+const ENGLISH_WEEKDAYS = [
+  "sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday",
+];
+const EXPLICIT_CET_DATE_TIME = /^(?:(monday|tuesday|wednesday|thursday|friday|saturday|sunday),?\s+)?(0?[1-9]|[12]\d|3[01])(st|nd|rd|th)\s+(january|february|march|april|may|june|july|august|september|october|november|december)\s+(20\d{2}),?\s+(\d{1,2})[.:](\d{2})\s*(am|pm)?\s+(cet|cest)$/i;
+
+function parseExplicitCetDateTime(raw) {
+  const match = raw.match(EXPLICIT_CET_DATE_TIME);
+  if (!match) return undefined;
+  const [, weekday, dayText, suffix, monthText, yearText, hourText, minuteText, meridiem, zone] = match;
+  const day = Number(dayText);
+  const year = Number(yearText);
+  const month = ENGLISH_MONTHS.indexOf(monthText.toLowerCase());
+  const hour = Number(hourText);
+  const minute = Number(minuteText);
+  const expectedSuffix = day % 100 >= 11 && day % 100 <= 13
+    ? "th"
+    : ({ 1: "st", 2: "nd", 3: "rd" }[day % 10] ?? "th");
+  if (
+    suffix.toLowerCase() !== expectedSuffix
+    || minute > 59
+    || (meridiem ? hour < 1 || hour > 12 : hour > 23)
+  ) return null;
+
+  const localHour = meridiem
+    ? hour % 12 + (meridiem.toLowerCase() === "pm" ? 12 : 0)
+    : hour;
+  const localDate = new Date(Date.UTC(year, month, day, localHour, minute));
+  if (
+    localDate.getUTCFullYear() !== year
+    || localDate.getUTCMonth() !== month
+    || localDate.getUTCDate() !== day
+    || (weekday && ENGLISH_WEEKDAYS[localDate.getUTCDay()] !== weekday.toLowerCase())
+  ) return null;
+
+  const offsetHours = zone.toLowerCase() === "cest" ? 2 : 1;
+  return new Date(localDate.getTime() - offsetHours * 60 * 60 * 1000);
+}
+
 export function normalizeDeadline(value, { now = new Date() } = {}) {
   if (value === null || value === undefined || value === "") return null;
   if (typeof value !== "string" && !(value instanceof Date)) return null;
@@ -100,7 +142,9 @@ export function normalizeDeadline(value, { now = new Date() } = {}) {
     && /\b(?:[1-9]|[12]\d|3[01])(?:st|nd|rd|th)?\b/i.test(raw)
     && /\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b/i.test(raw);
   if (!dateOnly && !isoDateTime && !textualFullDate) return null;
-  let parsed = new Date(dateOnly ? `${raw}T23:59:59.000Z` : raw);
+  const explicitCetTime = parseExplicitCetDateTime(raw);
+  if (explicitCetTime === null) return null;
+  let parsed = explicitCetTime ?? new Date(dateOnly ? `${raw}T23:59:59.000Z` : raw);
   if (Number.isNaN(parsed.getTime())) return null;
   const hasExplicitTime = /\d{1,2}:\d{2}|\b(?:am|pm|utc|gmt|cet|cest|est|edt|pst|pdt)\b/i.test(raw);
   if (textualFullDate && !hasExplicitTime) {
