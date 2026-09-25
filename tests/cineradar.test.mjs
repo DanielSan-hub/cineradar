@@ -12,6 +12,7 @@ import {
   alignOpportunityPayload,
   reviewRequiredForAutomatedIngest,
 } from "../lib/ingest-payload.mjs";
+import { chatGPTUserFromHeaders } from "../lib/chatgpt-identity.mjs";
 import { isAuthorizedTeamEmail } from "../lib/team-authorization.mjs";
 import {
   budgetMode,
@@ -77,6 +78,24 @@ test("team access requires an explicitly allowlisted exact email", () => {
   assert.equal(isAuthorizedTeamEmail("reviewer@example.com", "reviewer@example.com.evil"), false);
   assert.equal(isAuthorizedTeamEmail("", "reviewer@example.com"), false);
   assert.equal(isAuthorizedTeamEmail("reviewer@example.com", "reviewer"), false);
+});
+
+test("ChatGPT Sites identity accepts its documented email header without a user ID", () => {
+  assert.deepEqual(chatGPTUserFromHeaders(new Headers({
+    "oai-authenticated-user-email": " reviewer@example.com ",
+  })), {
+    email: "reviewer@example.com",
+    fullName: null,
+    displayName: "reviewer@example.com",
+  });
+  assert.equal(chatGPTUserFromHeaders(new Headers({
+    "oai-authenticated-user-id": "untrusted-id-only",
+  })), null);
+  assert.deepEqual(chatGPTUserFromHeaders(new Headers({
+    "oai-authenticated-user-email": "reviewer@example.com",
+    "oai-authenticated-user-full-name": "Giulia%20Rossi",
+    "oai-authenticated-user-full-name-encoding": "percent-encoded-utf-8",
+  }))?.displayName, "Giulia Rossi");
 });
 
 test("Supabase minimal writes may return an empty 200 or 201 response", async () => {
