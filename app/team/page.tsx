@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 import {
   ArrowLeft,
   ArrowUpRight,
@@ -33,9 +32,10 @@ export default async function TeamPage() {
     <main className="min-h-screen bg-[#071018] text-slate-100">
       <header className="border-b border-white/8 bg-[#071018]/95">
         <div className="mx-auto flex h-[68px] max-w-[1280px] items-center gap-4 px-4 sm:px-6">
-          <Link href="/" className="flex items-center gap-2 text-sm text-slate-400 hover:text-white">
+          {/* eslint-disable-next-line @next/next/no-html-link-for-pages -- Sites needs a full-page navigation from Team to Radar. */}
+          <a href="/" className="flex items-center gap-2 text-sm text-slate-400 hover:text-white">
             <ArrowLeft className="size-4" /> Radar
-          </Link>
+          </a>
           <div className="mx-auto flex items-center gap-2 text-sm font-medium text-white">
             <Radar className="size-4 text-cyan-300" /> Team room
           </div>
