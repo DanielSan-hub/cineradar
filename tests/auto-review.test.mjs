@@ -84,3 +84,14 @@ test("regressions from the first automatic run are rejected or escalated", () =>
   assert.equal(decide({ title: "The lim² 2027 Call for Projects", summary: "Call for projects for the lim² 2027 program", category: "Grant" }).decision, "human");
   assert.equal(decide({ title: "AI Movie Awards London", summary: "Submit your AI film, music video, or art." }).decision, "approve");
 });
+
+test("generic headings are rejected before and after ingestion", async () => {
+  const { isGenericTitle } = await import("../scripts/cineradar/normalization.mjs");
+  for (const title of ["Call For Entries", "Late Deadline: January 10, 2027", "Earlybird Deadline: October 25, 2026", "ワークショップ", "Open Call 2027", "Submissions", "Convocatoria abierta"]) {
+    assert.equal(isGenericTitle(title), true, title);
+  }
+  for (const title of ["Submissions – Call for Entries MONSTRA 2027", "Victoria Film Festival 2027", "KINO Athens Submissions", "Open Call | 25AV Residency Program"]) {
+    assert.equal(isGenericTitle(title), false, title);
+  }
+  assert.equal(autoReviewDecision(live, { now: NOW, page: goodPage, genericTitle: true }).decision, "reject");
+});

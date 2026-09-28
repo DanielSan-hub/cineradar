@@ -14,6 +14,7 @@ import { mapPool } from "./http.mjs";
 import { seriesKey } from "./registry-seeds.mjs";
 import { createRobotsChecker } from "./robots.mjs";
 import { supabase } from "./supabase.mjs";
+import { isGenericTitle } from "./normalization.mjs";
 import { fetchPage } from "./web-validation.mjs";
 
 const apply = process.argv.includes("--apply");
@@ -72,7 +73,12 @@ function findDuplicates(rows) {
     const theirs = tokens(right);
     if (mine.size < 2 || theirs.size < 2) return false;
     const shared = [...mine].filter((token) => theirs.has(token)).length;
-    return shared / Math.min(mine.size, theirs.size) >= 0.7 && (editionYear(left) ?? 0) === (editionYear(right) ?? 0);
+    const overlap = shared / Math.min(mine.size, theirs.size);
+    const leftYear = editionYear(left);
+    const rightYear = editionYear(right);
+    // A missing edition year does not separate near-identical titles.
+    const sameEdition = leftYear === rightYear || ((leftYear === null || rightYear === null) && overlap >= 0.9);
+    return overlap >= 0.7 && sameEdition;
   };
   // Compare every pending record with better-ranked records (approved first,
   // then stronger pending ones), so near-identical pairs keep one record.
@@ -144,11 +150,11 @@ const duplicates = findDuplicates(rows);
 const flags = await supportsFlags();
 
 const decisions = await mapPool(pending, 6, async (row) => {
-  const first = autoReviewDecision(row, { duplicateOf: duplicates.get(row.id) ?? null, page: { ok: true, callSignal: true, deadlineEvidenceFound: true } });
+  const first = autoReviewDecision(row, { duplicateOf: duplicates.get(row.id) ?? null, genericTitle: isGenericTitle(row.title), page: { ok: true, callSignal: true, deadlineEvidenceFound: true } });
   // Only records that could be approved need the (network) page check.
   if (first.decision !== "approve" && first.decision !== "human") return { row, ...first };
   const page = await checkOfficialPage(row);
-  return { row, page, ...autoReviewDecision(row, { duplicateOf: duplicates.get(row.id) ?? null, page }) };
+  return { row, page, ...autoReviewDecision(row, { duplicateOf: duplicates.get(row.id) ?? null, genericTitle: isGenericTitle(row.title), page }) };
 });
 
 const summary = { mode: apply ? "apply" : "dry-run", version: AUTO_REVIEW_VERSION, pending: pending.length, approve_limit: approveLimit, counts: {}, applied: {}, errors: 0 };

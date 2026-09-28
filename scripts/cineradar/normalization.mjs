@@ -261,6 +261,18 @@ function groundedUrl(rawValue, context) {
   return grounded ? { url: value, reason: null } : { url: null, reason: "UNGROUNDED_URL" };
 }
 
+const GENERIC_TITLE = /^(?:(?:early\s*-?\s*bird|earlybird|regular|late|final|extended|standard|last)?\s*deadlines?\b.*|call\s+for\s+(?:entries|submissions|projects|applications|films|works)|open\s+calls?|submissions?(?:\s+open)?|entries|apply(?:\s+now)?|how\s+to\s+(?:apply|submit)|registration(?:\s+open)?|workshops?|rules(?:\s+(?:and|&)\s+regulations)?|convocatoria(?:\s+abierta)?|bases|bando|iscrizioni|appel\s+[àa]\s+(?:projets|films|candidatures)|inscri(?:ç|c)(?:õ|o)es|ワークショップ|募集|応募|公募|공모|모집|征集)$/iu;
+
+/** True when a title is only a heading or a deadline tier, not an opportunity's name. */
+export function isGenericTitle(title) {
+  const stripped = String(title ?? "")
+    .replace(/\b(?:19|20)\d{2}(?:\s*[–-]\s*(?:19|20)?\d{2})?\b/g, " ")
+    .replace(/[|:–—\-!.,()[\]"'«»]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return !stripped || GENERIC_TITLE.test(stripped);
+}
+
 export function normalizeOpportunity(raw, context) {
   if (!raw || typeof raw !== "object" || raw.relevant === false) {
     throw new PipelineRejection("NOT_RELEVANT");
@@ -275,6 +287,9 @@ export function normalizeOpportunity(raw, context) {
   if (!factIsGrounded(title, evidence.title, context)) {
     throw new PipelineRejection("UNGROUNDED_TITLE");
   }
+  // A record needs a name. Section headings ("Call for entries") and deadline
+  // tiers ("Late Deadline: 10 Jan 2027") create duplicates of the real call.
+  if (isGenericTitle(title)) throw new PipelineRejection("GENERIC_TITLE");
   const extractedOrganizer = cleanText(raw.organizer, 240);
   const organizer = factIsGrounded(extractedOrganizer, evidence.organizer, context)
     ? extractedOrganizer
