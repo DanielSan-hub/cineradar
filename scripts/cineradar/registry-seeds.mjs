@@ -287,3 +287,52 @@ export function pickOfficialSite(seriesName, results) {
   }
   return null;
 }
+
+/** A host listing this many distinct series is a channel (aggregator, portal), not one series' site. */
+export const CHANNEL_MIN_SERIES = 3;
+
+/**
+ * Hosts that serve several series in the owner's datasets. They are monitored
+ * as directories and never excluded by the hold-out: finding a held-out series
+ * through a general channel is the discovery the hold-out is meant to measure.
+ *
+ * @param {Array<Record<string, any>>} seriesRows dataset rows
+ * @returns {Map<string, number>} host -> distinct series count
+ */
+export function channelHosts(seriesRows) {
+  const byHost = new Map();
+  for (const row of seriesRows) {
+    const key = seriesKey(row.event_series ?? row.opportunity_name);
+    if (!key) continue;
+    for (const url of [row.official_url, row.source_url]) {
+      const host = hostOf(url);
+      if (!host || isPlatformHost(host)) continue;
+      if (!byHost.has(host)) byHost.set(host, new Set());
+      byHost.get(host).add(key);
+    }
+  }
+  return new Map([...byHost].filter(([, keys]) => keys.size >= CHANNEL_MIN_SERIES).map(([host, keys]) => [host, keys.size]));
+}
+
+/** Directory source for a channel host: its home page, checked daily with a wider link window. */
+export function channelSource(host, seriesCount, { now = Date.now() } = {}) {
+  const url = `https://${host}/`;
+  return {
+    name: host,
+    url,
+    tier: 1,
+    priority: 1,
+    source_type: "community",
+    source_family: "opportunity-directory",
+    country: null,
+    region: null,
+    language: null,
+    opportunity_categories: [],
+    adapter: "link-window",
+    adapter_config: { checkpoint_key: "default", link_window_size: 6, seed: "dataset-channel", series_count: seriesCount },
+    min_poll_interval_minutes: 360,
+    poll_interval_minutes: 1_440,
+    max_poll_interval_minutes: 4_320,
+    next_check_at: staggeredFirstCheck(url, { now, spreadDays: 1 }),
+  };
+}

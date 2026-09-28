@@ -12,7 +12,7 @@
     "start": "node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js dev --config dist/server/wrangler.json --local --persist-to .wrangler/state --ip 127.0.0.1 --inspector-port 0",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "typecheck": "tsc --noEmit",
-    "test": "node --test tests/cineradar.test.mjs tests/benchmark.test.mjs tests/temporal-observations.test.mjs tests/review-workflow.test.mjs tests/coverage-pipeline.test.mjs tests/decision-fields.test.mjs tests/review-triage.test.mjs",
+    "test": "node --test tests/cineradar.test.mjs tests/benchmark.test.mjs tests/temporal-observations.test.mjs tests/review-workflow.test.mjs tests/coverage-pipeline.test.mjs tests/decision-fields.test.mjs tests/review-triage.test.mjs tests/auto-review.test.mjs",
     "verify": "npm run lint && npm run typecheck && npm test && npm run build",
     "db:generate": "drizzle-kit generate",
     "radar:discover": "node scripts/cineradar/discover.mjs",
@@ -29,6 +29,7 @@
     "radar:coverage": "node scripts/cineradar/coverage.mjs",
     "radar:resolve-sites": "node scripts/cineradar/resolve-sites.mjs",
     "radar:triage": "node scripts/cineradar/triage.mjs",
+    "radar:auto-review": "node scripts/cineradar/auto-review.mjs",
     "radar:enrich-existing": "node scripts/cineradar/enrich-existing.mjs"
   },
   "dependencies": {

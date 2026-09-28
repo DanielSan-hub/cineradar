@@ -12,6 +12,8 @@ import { basename } from "node:path";
 
 import { assertSourceRegistrySchema, supabase } from "./supabase.mjs";
 import {
+  channelHosts,
+  channelSource,
   hostOf,
   isHeldOut,
   isPlatformHost,
@@ -87,7 +89,7 @@ async function loadDatasets(paths) {
   return { seriesRows, portalRows };
 }
 
-function heldOutHosts(seriesRows) {
+function heldOutHosts(seriesRows, channels) {
   const hosts = new Set();
   let heldOutSeries = 0;
   const seen = new Set();
@@ -100,7 +102,9 @@ function heldOutHosts(seriesRows) {
     }
     for (const url of [row.official_url, row.source_url]) {
       const host = hostOf(url);
-      if (host && !isPlatformHost(host)) hosts.add(host);
+      // Channels (aggregators, portals) are never excluded: they list many
+      // series and are a general discovery path, not a held-out series' site.
+      if (host && !isPlatformHost(host) && !channels.has(host)) hosts.add(host);
     }
   }
   return { hosts, heldOutSeries };
@@ -134,6 +138,7 @@ async function upsertSources(rows) {
 await assertSourceRegistrySchema();
 const summary = { mode: apply ? "apply" : "dry-run" };
 const collected = [];
+let channelRows = [];
 
 if (!skipWikidata) {
   const wikidata = await loadWikidata();
@@ -145,7 +150,9 @@ if (!onlyWikidata) {
   const paths = String(process.env.CINERADAR_SEED_DATASETS ?? "").split(";").map((value) => value.trim()).filter(Boolean);
   if (!paths.length) throw new Error("Set CINERADAR_SEED_DATASETS or pass --only-wikidata");
   const { seriesRows, portalRows } = await loadDatasets(paths);
-  const { hosts: excludedHosts, heldOutSeries } = heldOutHosts(seriesRows);
+  const channels = channelHosts(seriesRows.map(({ row }) => row));
+  const { hosts: excludedHosts, heldOutSeries } = heldOutHosts(seriesRows, channels);
+  channelRows = [...channels].map(([host, count]) => channelSource(host, count, { now }));
   const seeded = [];
   let excluded = 0;
   for (const { row, dataset } of seriesRows) {
@@ -175,6 +182,7 @@ if (!onlyWikidata) {
     held_out_hosts: excludedHosts.size,
     rows_excluded_by_holdout: excluded,
     source_rows: seeded.length,
+    channel_hosts: channels.size,
   };
   collected.push(...seeded);
 }
@@ -194,4 +202,19 @@ summary.new_by_priority = fresh.reduce((counts, row) => {
   return counts;
 }, {});
 if (apply) summary.written = await upsertSources(fresh);
+if (channelRows.length) {
+  summary.channel_sources = channelRows.length;
+  summary.channel_sample = channelRows.slice(0, 12).map((row) => `${row.name} (${row.adapter_config.series_count} series)`);
+  if (apply) {
+    // Merge so channels registered earlier as ordinary sites get directory
+    // settings; statistics columns are not in the payload and are preserved.
+    for (let index = 0; index < channelRows.length; index += 500) {
+      await supabase("sources?on_conflict=url", {
+        method: "POST",
+        prefer: "resolution=merge-duplicates,return=minimal",
+        body: JSON.stringify(channelRows.slice(index, index + 500)),
+      });
+    }
+  }
+}
 console.log(JSON.stringify(summary, null, 2));

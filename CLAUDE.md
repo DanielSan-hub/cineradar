@@ -28,6 +28,16 @@ official URL, application URL, deadline, fee, prize, status, eligibility rule or
 other factual field. Unknown facts stay unknown and every automated lead remains
 behind human review.
 
+Owner decision 2026-09-29: human review is the exception, not the default.
+`auto-review.mjs` (daily, after triage) approves a pending record only when its
+official page is re-fetched and reachable, shows an open call, still states the
+confirmed future deadline, names an organizer, and there is no conflict; it
+rejects listing/programme/past-edition pages, archives duplicates, keeps records
+without a live deadline under automatic watch, and flags only undecidable
+records `needs-human` (the default `/team` view). Decisions go through the
+audited RPC as `auto-review@cineradar.invalid`, are reversible, and are capped
+at 15 approvals per run. Facts are still never invented.
+
 Owner approval 2026-09-28: Exa has its own budget pool of at most 9/month
 (ledger units; USD is counted 1:1 so real spend stays <= USD 9). All other
 providers keep the rules below. Both ceilings are enforced in the database by
@@ -101,6 +111,16 @@ are short-lived: request a fresh source-repository write credential from the
 Sites connector and pass it to Git without persisting or displaying it.
 
 ## GitHub mirror and scheduler state
+
+Update 2026-09-29: GitHub had not fired any scheduled run in the first ~12 hours
+after activation (0 `schedule` events; manual dispatches work). Check
+`gh api repos/DanielSan-hub/cineradar/actions/runs?event=schedule` and add a
+fallback trigger if it stays at 0. First checks were compressed to 1–4 days;
+monitor now takes 1,000 sources/run (201 sources took 100 s in CI); discovery
+runs twice daily (6 Exa queries, 80 LLM calls each). 75 dataset channel hosts
+(aggregators serving >= 3 series, e.g. aifilmcontests.com, asianfilmfestivals.com)
+are registered as daily directories; they had been wrongly excluded by the
+hold-out.
 
 Update 2026-09-28: private mirror `DanielSan-hub/cineradar` is remote `github`
 (`origin` stays the Sites remote); GitHub CLI is authenticated. Five Actions

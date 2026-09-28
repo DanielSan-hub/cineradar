@@ -218,8 +218,8 @@ test("publication gate accepts rolling calls, official sources and acknowledged 
 
 test("review views, pages and ids are parsed defensively", () => {
   assert.equal(parseReviewView("approved"), "approved");
-  assert.equal(parseReviewView("everything"), "pending");
-  assert.equal(parseReviewView(undefined), "pending");
+  assert.equal(parseReviewView("everything"), "human");
+  assert.equal(parseReviewView(undefined), "human");
   assert.equal(parseReviewPage("3"), 3);
   assert.equal(parseReviewPage("0"), 1);
   assert.equal(parseReviewPage("-2"), 1);

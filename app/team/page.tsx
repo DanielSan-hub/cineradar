@@ -26,15 +26,15 @@ import { getPipelineHealth, getReviewQueue } from "@/lib/server/data";
 import type { Opportunity, ReviewView } from "@/lib/types";
 
 const VIEW_LABELS: Record<ReviewView, string> = {
-  ready: "Ready to publish",
-  pending: "Needs verification",
+  human: "Needs you",
+  pending: "All pending (automatic)",
   approved: "Published",
   rejected: "Rejected & archived",
 };
 
 function teamHref(view: ReviewView, page = 1) {
   const params = new URLSearchParams();
-  if (view !== "pending") params.set("view", view);
+  if (view !== "human") params.set("view", view);
   if (page > 1) params.set("page", String(page));
   const query = params.toString();
   return query ? `/team?${query}` : "/team";
@@ -107,7 +107,7 @@ export default async function TeamPage({
           <div>
             {reviewPage.reviewWorkflow ? (
               <nav aria-label="Review views" className="mb-4 flex flex-wrap gap-2">
-                {(Object.keys(VIEW_LABELS) as ReviewView[]).filter((item) => item !== "ready" || reviewPage.triage).map((item) => (
+                {(Object.keys(VIEW_LABELS) as ReviewView[]).filter((item) => item !== "human" || reviewPage.triage).map((item) => (
                   <a
                     key={item}
                     href={teamHref(item)}
@@ -169,7 +169,7 @@ export default async function TeamPage({
                   </div>
                 </article>
               ))}
-              {!queue.length && <div className="rounded-2xl border border-dashed border-white/12 p-10 text-center text-slate-400">{view === "pending" ? "The queue is clear." : "No records here yet."}</div>}
+              {!queue.length && <div className="rounded-2xl border border-dashed border-white/12 p-10 text-center text-slate-400">{view === "human" ? "Nothing needs you: the automatic review settled every record it could evaluate." : view === "pending" ? "The queue is clear." : "No records here yet."}</div>}
             </div>
             {pageCount > 1 && (
               <nav aria-label="Pagination" className="mt-5 flex items-center justify-between text-sm">

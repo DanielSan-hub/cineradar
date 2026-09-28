@@ -73,13 +73,15 @@ test("unpublishable and suspicious records sink with explicit flags", () => {
   }
 });
 
-test("queue filters use readiness only when the triage columns exist", () => {
-  assert.equal(parseReviewView("ready"), "ready");
-  assert.deepEqual(reviewViewFilter("ready", { triage: true }), {
+test("the default queue shows only what the automatic review escalated", () => {
+  assert.equal(parseReviewView(undefined), "human");
+  assert.equal(parseReviewView("ready"), "human");
+  assert.deepEqual(reviewViewFilter("human", { triage: true }), {
     review_decision: "eq.pending",
-    triage_flags: "cs.{publishable}",
+    triage_flags: "cs.{needs-human}",
     order: "readiness_score.desc.nullslast,confidence.desc,discovered_at.desc,id.asc",
   });
   assert.equal(reviewViewFilter("pending", { triage: false }).order, "confidence.desc,discovered_at.desc,id.asc");
-  assert.equal(reviewViewFilter("ready", { triage: false }).triage_flags, undefined);
+  // Without triage columns there is no escalation flag: fall back to all pending.
+  assert.equal(reviewViewFilter("human", { triage: false }).triage_flags, undefined);
 });

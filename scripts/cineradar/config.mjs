@@ -49,7 +49,7 @@ export const config = {
   freeProcessingLimit: boundedNumber("FREE_PROCESSING_LIMIT", 40, { min: 1, max: 400, integer: true }),
   timeoutMs: boundedNumber("HTTP_TIMEOUT_MS", 12000, { min: 1000, max: 30000, integer: true }),
   llmTimeoutMs: boundedNumber("LLM_TIMEOUT_MS", 45000, { min: 5000, max: 60000, integer: true }),
-  monitorLinkLimit: boundedNumber("MONITOR_LINK_LIMIT", 2, { min: 0, max: 5, integer: true }),
+  monitorLinkLimit: boundedNumber("MONITOR_LINK_LIMIT", 2, { min: 0, max: 10, integer: true }),
   llmConcurrency: boundedNumber("LLM_CONCURRENCY", 2, { min: 1, max: 4, integer: true }),
   urlValidationConcurrency: boundedNumber("URL_VALIDATION_CONCURRENCY", 4, { min: 1, max: 8, integer: true }),
   sourceRefreshLimit: boundedNumber("SOURCE_REFRESH_LIMIT", 40, { min: 1, max: 1000, integer: true }),
