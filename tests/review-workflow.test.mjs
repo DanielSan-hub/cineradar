@@ -196,6 +196,19 @@ test("publication gate blocks missing or contradictory evidence", () => {
   }
 });
 
+test("a past deadline blocks every public status", () => {
+  for (const status of ["verified", "open", "closing-soon"]) {
+    for (const deadlineStatus of ["confirmed", "unknown", "estimated"]) {
+      const blockers = publicationBlockers(
+        { ...baseRow, status, deadline: "2026-09-15T00:00:00Z", deadline_status: deadlineStatus },
+        { now: NOW },
+      );
+      assert.ok(blockers.includes("deadline-passed"), `${status}/${deadlineStatus}`);
+      assert.equal(blockers.includes("deadline-not-confirmed"), false);
+    }
+  }
+});
+
 test("publication gate accepts rolling calls, official sources and acknowledged conflicts", () => {
   assert.deepEqual(publicationBlockers({ ...baseRow, deadline: null, deadline_status: "rolling" }, { now: NOW }), []);
   assert.deepEqual(publicationBlockers({ ...baseRow, official_url: null, source_type: "official" }, { now: NOW }), []);
@@ -229,7 +242,8 @@ test("review migration keeps the gate human-only and the audit append-only", asy
   const allowlist = sql.match(/editable constant text\[\] := array\[([\s\S]*?)\];/)[1]
     .match(/'([a-z_]+)'/g).map((item) => item.slice(1, -1)).sort();
   assert.deepEqual(allowlist, Object.keys(EDITABLE_FIELDS).sort());
-  // Blocker codes emitted by SQL must all have UI messages.
-  const sqlCodes = [...sql.matchAll(/array_append\(blockers, '([a-z-]+)'\)/g)].map((match) => match[1]);
+  // Blocker codes emitted by the latest SQL definition must all have UI messages.
+  const gate = await readFile("supabase/migrations/202609280001_publication_gate_past_deadline.sql", "utf8");
+  const sqlCodes = [...gate.matchAll(/array_append\(blockers, '([a-z-]+)'\)/g)].map((match) => match[1]);
   assert.deepEqual([...new Set(sqlCodes)].sort(), Object.keys(BLOCKER_MESSAGES).sort());
 });

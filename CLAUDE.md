@@ -311,6 +311,16 @@ live Supabase (SQL editor) before deploying; until then the UI shows the queue
 read-only. Publishing still needs a verified official URL, so run
 `radar:revalidate` after editing URLs.
 
+Update 2026-09-28: `202609260001` is applied live (verified read-only: 42
+pending, anon sees 0, anon cannot call the RPC or read audit events).
+`radar:revalidate` ran (76 URL checks, 0 failures, 0 LLM calls).
+`202609280001_publication_gate_past_deadline.sql` makes a recorded past
+deadline block every public status; it must be applied live too. With it, 22
+records pass the gate as `verified` and 1 as `open`. That is not a list to
+approve: it contains three likely duplicate pairs (FeatureLab 2027, AIDFF 15th,
+BFI Innovation Challenge Fund), a 2016 archive page (`1dc52b64`) and several
+generic landing-page URLs. The review UI is not deployed yet.
+
 Original brief: `/team` was read-only and loaded at most 50 rows. Add authenticated,
 server-side reviewer actions with no service credential in the browser. At a
 minimum the reviewer must be able to:
