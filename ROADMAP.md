@@ -25,7 +25,7 @@ tables with conflict flags; series/edition schema; full editorial workflow
 (edit, approve, reject, archive, reopen, audit trail, pagination); budget
 ledger with database-enforced ceilings.
 
-## Priority 1 — decision-grade fields (unlocks everything below)
+## Priority 1 — decision-grade fields (unlocks everything below) — DONE 2026-09-29
 
 Every team feature needs the same facts, and today they are mostly missing.
 Extract them from pages we already fetch, source-grounded, UNKNOWN when absent:
@@ -43,7 +43,7 @@ store the evidence quote per field; backfill from `raw_payload` where the
 value is already grounded. Measure completeness per field in `radar:audit`.
 Target: deadline, runtime, AI policy and fee above 60% on published records.
 
-## Priority 2 — queue triage (keeps review possible at scale)
+## Priority 2 — queue triage (keeps review possible at scale) — DONE 2026-09-29
 
 - Daily deterministic triage: archive pending records whose deadline has
   passed or whose status is closed (reversible, audited under a pipeline
@@ -52,7 +52,16 @@ Target: deadline, runtime, AI policy and fee above 60% on published records.
   soon, confidence, completeness. "Ready to publish" filter in `/team`.
 - Never auto-publish. Automation may only keep records private.
 
-## Priority 3 — the team's films and fit (first real team value)
+Status of 1–2: `decision-fields.mjs` extracts deadline, runtime, fee, AI
+policy, premiere rule and eligibility with verbatim evidence, filling only
+empty fields on single-opportunity pages; calibrated on the live pages
+(site-wide banners, JSON, per-category rules and negations are rejected).
+`radar:audit` reports DECISION_FIELDS completeness. `triage.mjs` runs daily
+after discovery: archives expired/closed pending records via the audited
+RPC and scores readiness; `/team` gains a "Ready to publish" tab once
+`202609300001_review_triage.sql` is applied and the UI is deployed.
+
+## Priority 3 — the team's films and fit (first real team value) — NEXT, not started
 
 - `team_assets`: title, type, runtime, completion date, genre, AI usage,
   production country, languages, premiere status per territory, public

@@ -29,6 +29,7 @@ const integrityOpportunityFields = new Set(INTEGRITY_OPPORTUNITY_FIELDS);
 let integritySchemaSupport: Promise<boolean> | undefined;
 let temporalReviewSupport: Promise<boolean> | undefined;
 let reviewWorkflowSupport: Promise<boolean> | undefined;
+let triageSupport: Promise<boolean> | undefined;
 
 export const DEFAULT_OPPORTUNITIES_PAGE_SIZE = 24;
 export const MAX_OPPORTUNITIES_PAGE_SIZE = 50;
@@ -205,6 +206,8 @@ export function mapOpportunityRecord(record: JsonRecord): Opportunity {
     reviewRequired: Boolean(record.review_required),
     reviewDecision: (nullableString(record.review_decision) ?? undefined) as ReviewDecision | undefined,
     reviewReason: nullableString(record.review_reason),
+    readinessScore: nullableNumber(record.readiness_score),
+    triageFlags: Array.isArray(record.triage_flags) ? record.triage_flags.map(String) : [],
     updatedAt: nullableString(record.updated_at),
     hasConflict: Boolean(record.has_conflict),
     previousStatus: nullableString(record.previous_status) as Opportunity["previousStatus"],
@@ -268,6 +271,23 @@ export async function supportsReviewWorkflow() {
     throw error;
   });
   return reviewWorkflowSupport;
+}
+
+/** True once the review triage migration (readiness score + flags) is applied. */
+async function supportsTriage() {
+  triageSupport ??= supabaseRequest(
+    "opportunities?select=readiness_score,triage_flags&limit=1",
+    SUPABASE_SERVICE_ROLE_KEY,
+    { fresh: true },
+  ).then(() => true).catch((error: unknown) => {
+    // Not cached: the migration can be applied without a redeploy.
+    triageSupport = undefined;
+    if (/Supabase 400:.*(?:readiness_score|triage_flags|PGRST204|42703)/i.test(String(error))) {
+      return false;
+    }
+    throw error;
+  });
+  return triageSupport;
 }
 
 function clampPageOptions(options?: OpportunityPageOptions) {
@@ -408,28 +428,32 @@ export async function getOpportunities(): Promise<{
 
 export async function getReviewQueue(
   options?: OpportunityPageOptions & { view?: ReviewView },
-): Promise<OpportunitiesPage & { reviewWorkflow: boolean }> {
+): Promise<OpportunitiesPage & { reviewWorkflow: boolean; triage: boolean }> {
   const { limit, offset } = clampPageOptions(options);
   if (!SUPABASE_URL && !SUPABASE_SERVICE_ROLE_KEY) {
     return {
       ...getDemoPage({ limit, offset }, ["signal", "discovered"]),
       reviewWorkflow: false,
+      triage: false,
     };
   }
   if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
     return {
       ...buildPage([], 0, limit, offset, false, "review-query-unavailable"),
       reviewWorkflow: false,
+      triage: false,
     };
   }
 
   let reviewWorkflow = false;
+  let triage = false;
   try {
     reviewWorkflow = await supportsReviewWorkflow();
+    triage = reviewWorkflow && await supportsTriage();
     const temporal = reviewWorkflow || await supportsTemporalReview();
     // Before the review workflow migration only the pending queue exists.
     const filter: Record<string, string> = reviewWorkflow
-      ? reviewViewFilter(options?.view)
+      ? reviewViewFilter(options?.view, { triage })
       : temporal
         ? { or: "(status.in.(signal,discovered),review_required.eq.true)", order: "discovered_at.desc,id.asc" }
         : { status: "in.(signal,discovered)", order: "discovered_at.desc,id.asc" };
@@ -455,12 +479,14 @@ export async function getReviewQueue(
         false,
       ),
       reviewWorkflow,
+      triage,
     };
   } catch (error) {
     console.error("Unable to load the live review queue", error);
     return {
       ...buildPage([], 0, limit, offset, false, "review-query-failed"),
       reviewWorkflow,
+      triage,
     };
   }
 }

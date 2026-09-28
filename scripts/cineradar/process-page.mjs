@@ -1,4 +1,5 @@
 import { config } from "./config.mjs";
+import { enrichRawOpportunity, extractDecisionFields } from "./decision-fields.mjs";
 import { deterministicPageExtraction } from "./deterministic-extractor.mjs";
 import { mapPool } from "./http.mjs";
 import { extractOpportunities } from "./llm.mjs";
@@ -101,6 +102,15 @@ export async function processFetchedPage({
   if (!rawItems.length) {
     recordRejection(metrics, "NOT_RELEVANT");
     return [];
+  }
+  // Page-level facts can only be attributed safely when the page describes a
+  // single opportunity; listing pages keep only what extraction grounded.
+  if (rawItems.length === 1) {
+    rawItems = [enrichRawOpportunity(
+      rawItems[0],
+      extractDecisionFields(page.text ?? "", { title: rawItems[0].title }),
+    )];
+    if (rawItems[0].decision_fields) incrementMetric(metrics, "enriched");
   }
 
   const normalized = [];

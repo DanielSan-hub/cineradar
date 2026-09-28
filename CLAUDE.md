@@ -313,6 +313,12 @@ Relevant migrations have been applied to live Supabase through
 
 The prioritised product roadmap (team value first) is in `ROADMAP.md`.
 
+Pending owner actions (2026-09-29): apply `202609290001_exa_budget_pool.sql`
+and `202609300001_review_triage.sql` in the Supabase SQL editor, then deploy
+the current commit through Codex (Team "Ready to publish" tab and badges).
+Triage already archived 11 expired pending records under
+`pipeline-triage@cineradar.invalid` (reversible with "Back to pending").
+
 ## Highest-priority implementation work
 
 ### 1. Build the human review workflow

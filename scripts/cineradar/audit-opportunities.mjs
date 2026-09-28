@@ -47,6 +47,11 @@ const enhancedColumns = [
   "application_url_status",
   "application_url_http_status",
   "application_url_final",
+  "max_runtime_minutes",
+  "ai_policy",
+  "entry_fee_amount",
+  "eligibility",
+  "review_decision",
   "raw_payload",
 ];
 
@@ -220,6 +225,27 @@ function duplicateReport(rows, keySelector) {
   };
 }
 
+/** Share of rows with each decision-grade fact known (UNKNOWN never counts). */
+function decisionFieldCompleteness(rows) {
+  const known = (value) => value !== null && value !== undefined && value !== ""
+    && !(Array.isArray(value) && value.length === 0);
+  const checks = {
+    deadline: (row) => known(row.deadline) || row.deadline_status === "rolling",
+    max_runtime: (row) => known(row.max_runtime_minutes),
+    ai_policy: (row) => known(row.ai_policy) && row.ai_policy !== "unclear",
+    entry_fee: (row) => known(row.entry_fee_amount),
+    application_url: (row) => known(row.application_url),
+    eligibility: (row) => known(row.eligibility),
+    premiere: (row) => known(row.raw_payload?.decision_fields?.premiere_requirement)
+      || known(row.raw_payload?.extraction?.premiere_requirement),
+  };
+  const total = rows.length;
+  return Object.fromEntries(Object.entries(checks).map(([field, check]) => {
+    const count = rows.filter(check).length;
+    return [field, { count, pct: total ? Number((100 * count / total).toFixed(1)) : null }];
+  }));
+}
+
 function buildReport(rows, schemaMode, publicCount, publicCheck) {
   const now = Date.now();
   const expired = rows.filter((row) => {
@@ -309,6 +335,11 @@ function buildReport(rows, schemaMode, publicCount, publicCheck) {
     EXPIRED: expired.length,
     UNKNOWN: unknownDeadline.length,
     PUBLISHED: expectedPublicRows.length,
+    DECISION_FIELDS: {
+      all: decisionFieldCompleteness(rows),
+      published: decisionFieldCompleteness(rows.filter((row) => row.review_decision === "approved")),
+      pending: decisionFieldCompleteness(rows.filter((row) => row.review_decision === "pending")),
+    },
     LINKS: {
       ...linkReport,
       INVALID_OR_UNREACHABLE_OPPORTUNITIES: invalidOpportunityIds.size,

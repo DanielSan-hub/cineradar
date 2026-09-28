@@ -58,6 +58,8 @@ const MONTHS = new Map(Object.entries({
   november: 11, nov: 11, novembre: 11, noviembre: 11, novembro: 11,
   december: 12, dec: 12, dicembre: 12, diciembre: 12, décembre: 12, decembre: 12, dezember: 12, dezembro: 12,
 }));
+/** Month names (en/it/es/fr/de/pt/nl, full and short) mapped to 1-12. */
+export const MONTH_NUMBERS = MONTHS;
 const MONTH_NAMES = [...MONTHS.keys()].sort((a, b) => b.length - a.length).join("|");
 
 const DATE_PATTERNS = [

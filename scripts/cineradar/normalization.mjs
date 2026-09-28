@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 
+import { MONTH_NUMBERS } from "./call-signal.mjs";
 import { canonicalizeUrl, isUrlGrounded } from "./web-validation.mjs";
 
 const ALLOWED_CATEGORIES = new Set([
@@ -180,7 +181,11 @@ function deadlineMatchesEvidence(deadline, rawValue, quote) {
     "july", "august", "september", "october", "november", "december",
   ];
   const month = date.getUTCMonth() + 1;
+  // Localized month names (e.g. "15 ottobre 2026") count as the same month.
+  const localizedMonth = [...MONTH_NUMBERS].some(([name, number]) => number === month
+    && new RegExp(`(?:^|[^\\p{L}])${name}(?:[^\\p{L}]|$)`, "u").test(evidence));
   return evidence.includes(monthNames[month - 1])
+    || localizedMonth
     || new RegExp(`(?:^|\\D)0?${month}(?:\\D|$)`).test(evidence);
 }
 

@@ -43,3 +43,9 @@ jobs:
           MONTHLY_BUDGET_EUR: "5"
           USD_TO_EUR_RATE: "1"
           CLOUDFLARE_DAILY_NEURON_LIMIT: "9000"
+      - name: Triage the review queue (archive expired, score readiness)
+        if: always()
+        run: node scripts/cineradar/triage.mjs --apply
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}

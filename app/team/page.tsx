@@ -21,10 +21,12 @@ import {
   parseReviewView,
   REVIEW_PAGE_SIZE,
 } from "@/lib/review-workflow.mjs";
+import { TRIAGE_FLAG_LABELS } from "@/lib/review-triage.mjs";
 import { getPipelineHealth, getReviewQueue } from "@/lib/server/data";
 import type { Opportunity, ReviewView } from "@/lib/types";
 
 const VIEW_LABELS: Record<ReviewView, string> = {
+  ready: "Ready to publish",
   pending: "Needs verification",
   approved: "Published",
   rejected: "Rejected & archived",
@@ -105,7 +107,7 @@ export default async function TeamPage({
           <div>
             {reviewPage.reviewWorkflow ? (
               <nav aria-label="Review views" className="mb-4 flex flex-wrap gap-2">
-                {(Object.keys(VIEW_LABELS) as ReviewView[]).map((item) => (
+                {(Object.keys(VIEW_LABELS) as ReviewView[]).filter((item) => item !== "ready" || reviewPage.triage).map((item) => (
                   <a
                     key={item}
                     href={teamHref(item)}
@@ -139,6 +141,14 @@ export default async function TeamPage({
                       <div className="flex flex-wrap gap-2">
                         <Badge variant="outline" className={item.status === "signal" ? "border-violet-400/30 bg-violet-400/10 text-violet-200" : "border-sky-400/30 bg-sky-400/10 text-sky-200"}>{item.status}</Badge>
                         <Badge variant="outline" className="border-white/10 bg-white/4 text-slate-400">{Math.round(item.confidence * 100)}% confidence</Badge>
+                        {item.reviewDecision === "pending" && typeof item.readinessScore === "number" && (
+                          <Badge variant="outline" className="border-cyan-300/30 bg-cyan-300/10 text-cyan-100">Readiness {item.readinessScore}</Badge>
+                        )}
+                        {item.reviewDecision === "pending" && (item.triageFlags ?? []).map((flag) => TRIAGE_FLAG_LABELS[flag as keyof typeof TRIAGE_FLAG_LABELS] ? (
+                          <Badge key={flag} variant="outline" className={flag === "publishable" ? "border-emerald-300/30 bg-emerald-300/10 text-emerald-100" : flag === "closing-soon" ? "border-rose-300/30 bg-rose-300/10 text-rose-100" : "border-white/10 bg-white/4 text-slate-400"}>
+                            {TRIAGE_FLAG_LABELS[flag as keyof typeof TRIAGE_FLAG_LABELS]}
+                          </Badge>
+                        ) : null)}
                         {item.reviewDecision && item.reviewDecision !== "pending" && <Badge variant="outline" className="border-white/10 bg-white/4 text-slate-300">{item.reviewDecision}</Badge>}
                         {item.reviewRequired && item.reviewDecision !== "rejected" && item.reviewDecision !== "archived" && <Badge variant="outline" className="border-amber-300/40 bg-amber-300/10 text-amber-100">Human review required</Badge>}
                       </div>
