@@ -97,10 +97,20 @@ Sites connector and pass it to Git without persisting or displaying it.
 
 ## GitHub mirror and scheduler state
 
-There is no verified GitHub mirror at handoff. `origin` is only the ChatGPT Sites
-remote. GitHub CLI is installed but is not authenticated, and no CineRadar
-Windows Scheduled Task was found. Therefore none of the repository schedules
-should be assumed to be running automatically.
+Update 2026-09-28: private mirror `DanielSan-hub/cineradar` is remote `github`
+(`origin` stays the Sites remote); GitHub CLI is authenticated. Five Actions
+secrets were loaded from `.env.local` without printing. Manual smoke runs all
+succeeded: monitor (37 sources checked, 0 LLM), revalidate (76 URL checks),
+stale (review-only), discovery (4 Exa queries, 24 LLM calls, 37 new + 3 updated
+records, EUR 0.044). Schedules for discovery, monitor, revalidate and stale are
+enabled; history stays disabled. Estimated usage is ~185 Actions minutes/month
+(free plan: 2,000). The owner still has to confirm the Actions spending limit
+is 0 in GitHub billing settings. Start the 7-day monitoring window from
+2026-09-28. Month-to-date ledger after the smoke runs: EUR 0.0847.
+
+Original handoff state: there was no verified GitHub mirror. `origin` was only
+the ChatGPT Sites remote, GitHub CLI was not authenticated, and no CineRadar
+Windows Scheduled Task existed.
 
 Five bounded workflow definitions already exist:
 
