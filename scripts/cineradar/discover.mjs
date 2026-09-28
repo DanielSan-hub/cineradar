@@ -12,6 +12,7 @@ import {
   reserveProviderUsage,
   usageIdempotencyKey,
 } from "./cost-control.mjs";
+import { scoreCallSignal } from "./call-signal.mjs";
 import { admitDiscoveryCandidates } from "./discovery-candidates.mjs";
 import { fetchWithTimeout, mapPool } from "./http.mjs";
 import { dedupeOpportunitiesDetailed } from "./normalization.mjs";
@@ -201,14 +202,21 @@ async function searchExa(query, resultLimit) {
 
 async function pendingKnownSourceCandidates(limit) {
   if (limit <= 0) return [];
-  const cacheRows = await supabase(
-    "url_fetch_cache?select=canonical_url,source_id,content_hash,processed_hash,last_changed_at,next_retry_at&source_id=not.is.null&content_hash=not.is.null&order=last_changed_at.asc&limit=2000",
-  );
+  // PostgREST cannot compare two columns, so fetch never-processed pages
+  // server-side and add recently changed ones; a single oldest-first window
+  // would starve new pages once the cache holds tens of thousands of rows.
+  const fields = "canonical_url,source_id,content_hash,processed_hash,last_changed_at,next_retry_at";
+  const [neverProcessed, recentlyChanged] = await Promise.all([
+    supabase(`url_fetch_cache?select=${fields}&source_id=not.is.null&content_hash=not.is.null&processed_hash=is.null&order=last_changed_at.asc&limit=2000`),
+    supabase(`url_fetch_cache?select=${fields}&source_id=not.is.null&content_hash=not.is.null&processed_hash=not.is.null&order=last_changed_at.desc&limit=1000`),
+  ]);
   const now = Date.now();
-  const pending = cacheRows.filter((row) =>
-    row.content_hash !== row.processed_hash
-    && (!row.next_retry_at || Date.parse(row.next_retry_at) <= now),
-  );
+  const pending = [...new Map([...recentlyChanged, ...neverProcessed].map((row) => [row.canonical_url, row])).values()]
+    .filter((row) =>
+      row.content_hash !== row.processed_hash
+      && (!row.next_retry_at || Date.parse(row.next_retry_at) <= now),
+    )
+    .sort((left, right) => Date.parse(left.last_changed_at ?? 0) - Date.parse(right.last_changed_at ?? 0));
   const sourceIds = [...new Set(pending.map((row) => row.source_id).filter(Boolean))];
   if (!sourceIds.length) return [];
   const sources = await supabase(
@@ -510,7 +518,20 @@ try {
   })).filter(Boolean);
   const unchangedPages = observations.filter((item) => item.unchanged);
   await persistExistingPageProvenance(unchangedPages, run.id);
-  const fetched = observations.filter((item) => !item.unchanged);
+  // Known-source pages without a call are settled for free; the LLM budget
+  // then goes to the strongest call signals first.
+  const scored = observations
+    .filter((item) => !item.unchanged)
+    .map((item) => ({ ...item, callSignal: scoreCallSignal(item.page.text ?? "") }));
+  const noSignal = scored.filter((item) =>
+    !item.callSignal.pass
+    && item.candidate.provenance.every((entry) => entry.provider === "source_monitor"),
+  );
+  if (noSignal.length) recordRejection(metrics, "NO_CALL_SIGNAL", noSignal.length);
+  await markPagesProcessed(noSignal);
+  const fetched = scored
+    .filter((item) => !noSignal.includes(item))
+    .sort((left, right) => right.callSignal.score - left.callSignal.score);
 
   let claimedLlmCalls = 0;
   const claimLlmCall = () => {

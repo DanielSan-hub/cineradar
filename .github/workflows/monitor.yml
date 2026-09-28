@@ -3,7 +3,8 @@ name: CineRadar source monitor
 on:
   workflow_dispatch:
   schedule:
-    - cron: "43 0,12 * * *"
+    # Three runs a day keep ~15k registry sources on their polling schedules.
+    - cron: "43 0,8,16 * * *"
 
 concurrency:
   group: cineradar-pipeline
@@ -12,7 +13,7 @@ concurrency:
 jobs:
   monitor:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 12
     permissions:
       contents: read
     steps:
@@ -27,4 +28,6 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           HTTP_TIMEOUT_MS: "12000"
           MONITOR_LINK_LIMIT: "2"
-          SOURCE_REFRESH_LIMIT: "40"
+          SOURCE_REFRESH_LIMIT: "400"
+          MONITOR_CONCURRENCY: "10"
+          MONITOR_TIME_BUDGET_SECONDS: "540"

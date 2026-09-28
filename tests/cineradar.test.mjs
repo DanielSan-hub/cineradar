@@ -729,14 +729,27 @@ test("scheduled workflow ceilings stay below 2,000 private-runner minutes", asyn
     ".github/workflows/monitor.yml",
     ".github/workflows/revalidate.yml",
     ".github/workflows/stale.yml",
+    ".github/workflows/history.yml",
+    ".github/workflows/registry.yml",
   ];
   const contents = await Promise.all(workflowFiles.map((file) => readFile(file, "utf8")));
-  assert.match(contents[0], /cron: "17 6 \* \* \*"/);
-  assert.match(contents[1], /cron: "43 0,12 \* \* \*"/);
-  assert.match(contents[2], /cron: "13 3 \* \* 0"/);
-  assert.match(contents[3], /cron: "37 4 1 \* \*"/);
   assert.ok(contents.every((content) => /group: cineradar-pipeline/.test(content)));
-  const worstCaseMinutes = 31 * 20 + 62 * 10 + 5 * 15 + 10;
-  assert.equal(worstCaseMinutes, 1325);
-  assert.ok(worstCaseMinutes < 2000);
+  // Worst case: every scheduled run hits its timeout, in a 31-day month.
+  const runsPerMonth = (cron) => {
+    const [, hours, dayOfMonth, , dayOfWeek] = cron.split(/\s+/);
+    const perDay = hours.split(",").length;
+    if (dayOfMonth !== "*") return perDay * dayOfMonth.split(",").length;
+    if (dayOfWeek !== "*") return perDay * 5 * dayOfWeek.split(",").length;
+    return perDay * 31;
+  };
+  const worstCaseMinutes = contents.reduce((total, content) => {
+    const crons = [...content.matchAll(/cron: "([^"]+)"/g)].map((match) => match[1]);
+    const timeout = Number(content.match(/timeout-minutes: (\d+)/)[1]);
+    return total + crons.reduce((sum, cron) => sum + runsPerMonth(cron) * timeout, 0);
+  }, 0);
+  assert.ok(worstCaseMinutes < 2000, `worst case ${worstCaseMinutes} minutes`);
+  assert.match(contents[1], /MONITOR_TIME_BUDGET_SECONDS: "(\d+)"/);
+  const budget = Number(contents[1].match(/MONITOR_TIME_BUDGET_SECONDS: "(\d+)"/)[1]);
+  const monitorTimeout = Number(contents[1].match(/timeout-minutes: (\d+)/)[1]);
+  assert.ok(budget <= (monitorTimeout - 2) * 60, "monitor must stop before its job timeout");
 });

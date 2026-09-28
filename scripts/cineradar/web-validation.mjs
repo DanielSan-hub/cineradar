@@ -48,6 +48,14 @@ const LINK_POSITIVE = [
   /征集|报名|提交/,
   /φεστιβάλ|υποβολ|πρόσκληση/iu,
   /دعوة|تقديم|مسابقة|منحة|إقامة/,
+  // Broader European and Asian call vocabulary (registry-scale monitoring).
+  /inscription|candidature|participer|iscrizion|partecipa|participa|postula/i,
+  /convocat(?:ò|o)ria|inscripcions|candidatura/i,
+  /nevez(?:é|e)s|p(?:á|a)ly(?:á|a)zat|jelentkez/i,
+  /p(?:ř|r)ihl(?:á|a)(?:š|s)k|(?:î|i)nscrier|zg(?:ł|l)osz|nab(?:ó|o)r|ba(?:ş|s)vuru/i,
+  /ans(?:ö|o)k|anm(?:ä|a)lan|ans(?:ø|o)g|s(?:ø|o)knad|tilmeld|p(?:å|a)melding|haku|inzend/i,
+  /pendaftaran|enter|call[- ]for|entry/i,
+  /รับสมัคร|ส่งผลงาน|הגשת|קול קורא|आवेदन|đăng ký|приём заявок|конкурс/iu,
 ];
 const LINK_STRONG = [
   /\bapply\b/i,
@@ -75,6 +83,10 @@ const LINK_STRONG = [
   /募集|応募|提出|征集|报名|제출|공모/,
   /υποβολ|πρόσκληση/iu,
   /دعوة|تقديم|مسابقة|منحة/,
+  /inscription|candidature|iscrizion|convocat(?:ò|o)ria|inscripcions|candidatura|postula/i,
+  /nevez(?:é|e)s|p(?:á|a)ly(?:á|a)zat|jelentkez|p(?:ř|r)ihl(?:á|a)(?:š|s)k|(?:î|i)nscrier|zg(?:ł|l)osz|ba(?:ş|s)vuru/i,
+  /ans(?:ö|o)k|anm(?:ä|a)lan|ans(?:ø|o)g|s(?:ø|o)knad|tilmeld|p(?:å|a)melding|inzend|pendaftaran|call[- ]for/i,
+  /รับสมัคร|ส่งผลงาน|הגשת|קול קורא|आवेदन|приём заявок/iu,
 ];
 const LINK_NEGATIVE = [
   /(?:^|\/)archive(?:[_/-]|\/|$)/i,

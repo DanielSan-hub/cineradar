@@ -378,6 +378,37 @@ above. Do not enable unattended runs until manual workflow smoke tests succeed.
 After activation, monitor it for at least seven days and record run success,
 records added, cache/unchanged rate, cost, false positives and public output.
 
+### Coverage architecture (2026-09-28)
+
+Discovery was rebuilt around a registry of *series* plus cheap call detection,
+instead of searching for opportunities one by one:
+
+- `import-registry.mjs` seeds `sources` from Wikidata (14,193 active film
+  festival series with an official site, CC0, free) and from the owner's
+  deep-research datasets (sources only; never opportunities). A deterministic
+  20% of dataset series (`registry-seeds.mjs`, salt `cineradar-holdout-v1`) is
+  held out and never seeded; the benchmark workbook is refused outright.
+  Registry after import: 14,719 sources. `registry.yml` refreshes Wikidata
+  monthly.
+- `robots.mjs`: robots.txt is honoured per origin (RFC 9309); FilmFreeway is
+  never fetched (Cloudflare bot challenge). Disallowed sources become `blocked`.
+- `call-signal.mjs`: multilingual (~25 languages) call/date gate run in the
+  monitor on already-fetched text. Pages without a call are marked processed
+  for free (`NO_CALL_SIGNAL`); discovery spends LLM calls on the highest
+  scores first. Calibrated on real pages: 91% recall on series that were open,
+  30% pass rate on random festival homepages. Known miss: JavaScript-only sites.
+- Monitor: 3 runs/day x 400 sources, 9-minute time budget. Discovery: 300
+  gated pages and 60 LLM calls/day. Worst-case Actions minutes 1,701/month
+  (test-enforced < 2,000); realistic ~800. Expected API spend ~EUR 2/month.
+- `coverage.mjs` (evaluation only, needs `CINERADAR_SEED_DATASETS`) reports
+  registered / monitored / found / published for held-out vs seeded series.
+  Baseline right after import: held-out registered 60%, seeded 75.7%,
+  monitored ~4% (schedules spread first checks over 1-21 days).
+- Structural ceiling: 43% of actionable dataset series are recorded only as
+  FilmFreeway pages. Next steps: resolve their own sites (ledgered Exa, about
+  EUR 2 one-time for seeded series), Festhome/other allowed platforms, and ask
+  FilmFreeway for permitted access (owner decision).
+
 ### 4. Improve discovery coverage from measured gaps
 
 Coverage is currently the main product-quality failure. Expand productive source

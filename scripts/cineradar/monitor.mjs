@@ -1,7 +1,10 @@
 import { createHash } from "node:crypto";
 
+import { CALL_SIGNAL_VERSION, scoreCallSignal } from "./call-signal.mjs";
 import { config } from "./config.mjs";
 import { mapPool } from "./http.mjs";
+import { BLOCKED_HOSTS } from "./registry-seeds.mjs";
+import { createRobotsChecker } from "./robots.mjs";
 import {
   fetchUrlCache,
   observeFetchedPage,
@@ -35,6 +38,45 @@ import {
 
 let run = null;
 const metrics = createRunMetrics("monitor");
+const USER_AGENT = "CineRadarBot/2.0 (+https://cineradar.danielmaker.chatgpt.site)";
+const robotsAllowed = createRobotsChecker({ userAgent: USER_AGENT });
+const gate = { passed: 0, discarded: 0, robotsBlocked: 0, deferredByTimeBudget: 0 };
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function isBlockedHost(url) {
+  try {
+    const host = new URL(url).hostname.toLowerCase().replace(/^www\./, "");
+    return BLOCKED_HOSTS.some((blocked) => host === blocked || host.endsWith(`.${blocked}`));
+  } catch {
+    return true;
+  }
+}
+
+// Pages with no actionable call are settled here, for free, so discovery only
+// spends extraction effort on pages that announce a submission window.
+async function gateCallSignal(page, observation) {
+  if (page.notModified || observation.alreadyProcessed) return;
+  const signal = scoreCallSignal(page.text ?? "");
+  if (signal.pass) {
+    gate.passed += 1;
+    return;
+  }
+  gate.discarded += 1;
+  recordRejection(metrics, "NO_CALL_SIGNAL");
+  const canonicalUrl = canonicalizeUrl(page.inputUrl ?? page.finalUrl);
+  if (!canonicalUrl) return;
+  const processedAt = new Date().toISOString();
+  await supabase(`url_fetch_cache?canonical_url=eq.${encodeURIComponent(canonicalUrl)}`, {
+    method: "PATCH",
+    prefer: "return=minimal",
+    body: JSON.stringify({
+      processed_hash: observation.contentHash,
+      last_processed_at: processedAt,
+      processor_version: CALL_SIGNAL_VERSION,
+      updated_at: processedAt,
+    }),
+  });
+}
 
 function attemptKey(sourceId, checkedAt) {
   return createHash("sha256")
@@ -51,7 +93,7 @@ async function updateSource(source, outcome) {
 }
 
 const SUBMISSION_HOSTS = new Set([
-  "filmfreeway.com", "festhome.com", "shortfilmdepot.com",
+  "festhome.com", "shortfilmdepot.com",
   "submittable.com", "eventival.com", "filmfestplatform.com",
 ]);
 
@@ -117,6 +159,7 @@ async function fetchObserved(url, source, existing, { forceBody = false } = {}) 
     : await observeFetchedPage(page, { sourceId: source.id, existing });
   if (observation.changed) incrementMetric(metrics, "discovered");
   else incrementMetric(metrics, "unchanged");
+  await gateCallSignal(page, observation);
   return { page, observation };
 }
 
@@ -215,9 +258,37 @@ try {
   });
   const initialCache = await fetchUrlCache(plans.map((plan) => plan.requestUrl));
 
-  const results = await mapPool(plans, 6, async ({ source, checkpoint, requestUrl }) => {
+  const deadline = Date.now() + config.monitorTimeBudgetSeconds * 1000;
+  const results = await mapPool(plans, config.monitorConcurrency, async ({ source, checkpoint, requestUrl }) => {
+    if (Date.now() > deadline) {
+      gate.deferredByTimeBudget += 1;
+      return { ok: false, skipped: true, changed: false, childPages: 0, newCandidateCount: 0 };
+    }
     const startedAt = new Date().toISOString();
     const sourceUrl = canonicalizeUrl(requestUrl);
+    const permission = isBlockedHost(requestUrl)
+      ? { allowed: false, reason: "HOST_BLOCKS_AUTOMATION" }
+      : await robotsAllowed(requestUrl);
+    if (!permission.allowed) {
+      gate.robotsBlocked += 1;
+      recordRejection(metrics, permission.reason);
+      // Unreachable robots.txt is transient; an explicit disallow is not.
+      const blocked = permission.reason !== "ROBOTS_UNREACHABLE";
+      await updateSource(source, blocked
+        ? { checkedAt: startedAt, blocked: true, reason: permission.reason }
+        : { checkedAt: startedAt, failed: true, error: permission.reason });
+      await recordAttempt(source, {
+        status: blocked ? "blocked" : "failed",
+        request_count: 1,
+        result_count: 0,
+        candidate_count: 0,
+        started_at: startedAt,
+        finished_at: new Date().toISOString(),
+        request_url: requestUrl,
+        error: permission.reason,
+      });
+      return { ok: false, changed: false, childPages: 0, newCandidateCount: 0 };
+    }
     try {
       // Link-window adapters need the body to advance through different child
       // windows even when the directory hash itself is unchanged.
@@ -231,13 +302,21 @@ try {
         source,
         parent.page.linkRecords,
         { sourceUrl: parent.page.finalUrl, limit: parent.page.linkRecords.length },
-      ).filter((link) => sameHost(parent.page.finalUrl, link.url));
+      ).filter((link) => sameHost(parent.page.finalUrl, link.url) && !isBlockedHost(link.url));
       const linkLimit = Math.min(config.monitorLinkLimit, checkpoint.link_window_size);
       const links = eligibleLinks.slice(checkpoint.link_offset, checkpoint.link_offset + linkLimit);
       const newCandidateCount = await observeDiscoveredUrls(source, links, startedAt);
       const childCache = await fetchUrlCache(links.map((link) => link.url));
-      const children = await mapPool(links, 2, async (link) => {
+      // Honour Crawl-delay between requests to the same site (capped per run).
+      const delayMs = Math.min(Number(permission.crawlDelay ?? 0), 10) * 1000;
+      const children = await mapPool(links, delayMs ? 1 : 2, async (link) => {
         const canonical = canonicalizeUrl(link.url);
+        const childPermission = await robotsAllowed(link.url);
+        if (!childPermission.allowed) {
+          recordRejection(metrics, childPermission.reason);
+          return { ok: false, changed: false };
+        }
+        if (delayMs) await sleep(delayMs);
         try {
           const child = await fetchObserved(
             link.url,
@@ -312,10 +391,11 @@ try {
     status: "succeeded",
     sources_due_in_query: allSources.length,
     sources_due: sources.length,
-    sources_checked: results.length,
+    sources_checked: results.filter((result) => !result.skipped).length,
     sources_changed: results.filter((result) => result.changed).length,
     new_candidate_urls: results.reduce((sum, result) => sum + result.newCandidateCount, 0),
     child_pages_checked: results.reduce((sum, result) => sum + result.childPages, 0),
+    call_signal: gate,
     llm_calls: 0,
     ...summarizeMetrics(metrics),
   }));
