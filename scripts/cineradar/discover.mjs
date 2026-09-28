@@ -436,11 +436,18 @@ try {
   );
   const extractionConfigured = cloudflareConfigured || groqConfigured;
   const budget = await getBudgetState();
-  const budgetLimits = limitsForBudget(budget.mode, {
+  const requestedLimits = {
     queryLimit: config.discoveryQueryLimit,
     resultLimit: config.discoveryResultLimit,
     llmLimit: config.maxLlmCalls,
-  });
+  };
+  // Search volume follows the Exa pool; extraction follows the core pool.
+  const exaLimits = limitsForBudget(budget.exaMode, requestedLimits);
+  const budgetLimits = {
+    ...limitsForBudget(budget.mode, requestedLimits),
+    queryLimit: exaLimits.queryLimit,
+    resultLimit: exaLimits.resultLimit,
+  };
   const limits = extractionConfigured && cloudflareParts !== 1
     ? budgetLimits
     : { ...budgetLimits, queryLimit: 0, llmLimit: 0 };

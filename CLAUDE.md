@@ -28,6 +28,11 @@ official URL, application URL, deadline, fee, prize, status, eligibility rule or
 other factual field. Unknown facts stay unknown and every automated lead remains
 behind human review.
 
+Owner approval 2026-09-28: Exa has its own budget pool of at most 9/month
+(ledger units; USD is counted 1:1 so real spend stays <= USD 9). All other
+providers keep the rules below. Both ceilings are enforced in the database by
+`202609290001_exa_budget_pool.sql`.
+
 The preferred recurring API spend is EUR 0–3/month. The technical hard ceiling
 for metered provider reservations is EUR 5/month. Do not enable a paid service,
 paid fallback, paid GitHub overage, paid Supabase plan, or paid Cloudflare plan
@@ -404,6 +409,12 @@ instead of searching for opportunities one by one:
   registered / monitored / found / published for held-out vs seeded series.
   Baseline right after import: held-out registered 60%, seeded 75.7%,
   monitored ~4% (schedules spread first checks over 1-21 days).
+- Site resolution (`resolve-sites.mjs`, ledgered Exa, seeded series only):
+  145 own sites registered for 262 platform-only series, EUR 1.83; 92 have no
+  own site (FilmFreeway-only). A picker rule requires the series name or
+  initials in the domain (precision fix after a 78%-precision first batch).
+  Coverage after resolution: held-out registered 60%, seeded 83.6%, all 78.7%.
+  Discovery gap search raised to 12 Exa queries/day (~EUR 2.6/month).
 - Structural ceiling: 43% of actionable dataset series are recorded only as
   FilmFreeway pages. Next steps: resolve their own sites (ledgered Exa, about
   EUR 2 one-time for seeded series), Festhome/other allowed platforms, and ask

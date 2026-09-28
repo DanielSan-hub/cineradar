@@ -190,27 +190,37 @@ function utcMonthStart(now = new Date()) {
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
 }
 
+/** Exa spends from its own pool; every other provider shares the core pool. */
+export function budgetPool(provider) {
+  return provider === "exa" ? "exa" : "core";
+}
+
 export async function getBudgetState(now = new Date()) {
   const rows = await supabase(
-    `provider_usage_events?select=status,reserved_cost_eur,estimated_cost_eur&occurred_at=gte.${encodeURIComponent(utcMonthStart(now))}&limit=10000`,
+    `provider_usage_events?select=provider,status,reserved_cost_eur,estimated_cost_eur&occurred_at=gte.${encodeURIComponent(utcMonthStart(now))}&limit=10000`,
   );
   const counted = new Set(["reserved", "succeeded", "uncertain"]);
-  const spendEur = rows.reduce((total, row) => {
-    if (!counted.has(row.status)) return total;
+  const spend = { core: 0, exa: 0 };
+  for (const row of rows) {
+    if (!counted.has(row.status)) continue;
     const value = row.status === "reserved"
       ? row.reserved_cost_eur
       : row.estimated_cost_eur ?? row.reserved_cost_eur;
-    return total + finiteNonnegative(value);
-  }, 0);
+    spend[budgetPool(row.provider)] += finiteNonnegative(value);
+  }
+  const exaStop = config.exaMonthlyBudgetEur * 0.9;
   return {
-    spendEur: Number(spendEur.toFixed(8)),
+    spendEur: Number(spend.core.toFixed(8)),
     budgetEur: config.monthlyBudgetEur,
     utilization: config.monthlyBudgetEur > 0
-      ? spendEur / config.monthlyBudgetEur
+      ? spend.core / config.monthlyBudgetEur
       : 1,
     targetEur: Math.min(config.monthlyBudgetEur, config.monthlyTargetEur),
     optionalStopEur: Math.min(config.monthlyBudgetEur, config.optionalStopEur),
-    mode: budgetMode(spendEur),
+    mode: budgetMode(spend.core),
+    exaSpendEur: Number(spend.exa.toFixed(8)),
+    exaBudgetEur: config.exaMonthlyBudgetEur,
+    exaMode: budgetMode(spend.exa, config.exaMonthlyBudgetEur, config.exaMonthlyTargetEur, exaStop),
   };
 }
 
@@ -237,7 +247,9 @@ export async function reserveProviderUsage({
       p_model: model,
       p_reserved_cost_eur: reservedCostEur,
       p_usage_units: usageUnits,
-      p_monthly_budget_eur: config.monthlyBudgetEur,
+      p_monthly_budget_eur: budgetPool(provider) === "exa"
+        ? config.exaMonthlyBudgetEur
+        : config.monthlyBudgetEur,
       p_optional: optional,
       p_daily_usage_limit: dailyUsageLimit,
       p_metadata: {

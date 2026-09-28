@@ -26,7 +26,7 @@ export function seriesKey(name) {
   return String(name ?? "")
     .toLowerCase()
     .normalize("NFKD")
-    .replace(/[̀-ͯ]/g, "")
+    .replace(/\p{M}/gu, "")
     .replace(/\b(?:19|20)\d{2}\b/g, " ")
     .replace(/\b\d+(?:st|nd|rd|th|e|er|a|o|º|ª)?\b/g, " ")
     .replace(/[^\p{L}\p{N}]+/gu, " ")
@@ -230,4 +230,60 @@ export function mergeSeedSources(rows) {
 /** Chapman's bias-corrected Lincoln-Petersen estimate of population size. */
 export function chapman(n1, n2, m) {
   return Math.round(((n1 + 1) * (n2 + 1)) / (m + 1) - 1);
+}
+
+// Result hosts that describe a series but are never its own site.
+const NON_OFFICIAL_HOSTS = [
+  "imdb.com", "letterboxd.com", "wikipedia.org", "wikidata.org", "festivalfocus.org",
+  "filmfestivallife.com", "filmmakers.festhome.com", "reddit.com", "medium.com",
+  "eventbrite.com", "allevents.in", "withoutabox.com", "stage32.com", "backstage.com",
+  "festagent.com", "festivalreel.com", "filmfestivalguild.com", "stayhappening.com",
+];
+
+/** Initials of a series name, including filler words ("Burano AI Film Festival" -> "baiff"). */
+function nameInitials(value) {
+  return String(value ?? "")
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/\p{M}/gu, "")
+    .replace(/\b(?:19|20)\d{2}\b/g, " ")
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean)
+    .map((word) => word[0])
+    .join("");
+}
+
+function nameTokens(value) {
+  return seriesKey(value).split(" ").filter((token) => token.length > 2);
+}
+
+/**
+ * Choose a series' own website from search results, or null. The result must
+ * not be a platform/database and must share most of the series' name tokens
+ * (in its title or host); single-word names must appear in the host.
+ */
+export function pickOfficialSite(seriesName, results) {
+  const wanted = nameTokens(seriesName);
+  if (!wanted.length) return null;
+  for (const result of results ?? []) {
+    const url = safeSeedUrl(result?.url);
+    const host = hostOf(url);
+    if (!url || !host || isPlatformHost(host)) continue;
+    if (NON_OFFICIAL_HOSTS.some((blocked) => host === blocked || host.endsWith(`.${blocked}`))) continue;
+    const hostText = host.replace(/[.-]/g, " ");
+    const haystack = new Set([...nameTokens(result.title ?? ""), ...nameTokens(hostText)]);
+    const compactHost = host.replace(/[^a-z0-9]/g, "");
+    const shared = wanted.filter((token) => haystack.has(token) || compactHost.includes(token)).length;
+    // Own sites carry the series' name or initials in the domain; listings,
+    // news articles and similarly named organisations usually do not.
+    const registrable = host.split(".").slice(0, -1).join("").replace(/[^a-z0-9]/g, "");
+    const initials = nameInitials(seriesName);
+    const hostNamesSeries = wanted.some((token) => token.length >= 3 && registrable.includes(token))
+      || (initials.length >= 3 && registrable.includes(initials.slice(0, Math.min(initials.length, 5))));
+    if (!hostNamesSeries) continue;
+    if (wanted.length === 1 ? compactHost.includes(wanted[0]) : shared / wanted.length >= 0.6) {
+      return url;
+    }
+  }
+  return null;
 }

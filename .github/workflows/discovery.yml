@@ -30,7 +30,7 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_AI_MODEL: "@cf/meta/llama-3.1-8b-instruct-fp8-fast"
           GROQ_FALLBACK_ENABLED: "false"
-          DISCOVERY_QUERY_LIMIT: "4"
+          DISCOVERY_QUERY_LIMIT: "12"
           DISCOVERY_RESULT_LIMIT: "5"
           MAX_LLM_CALLS_PER_RUN: "60"
           FREE_PROCESSING_LIMIT: "300"

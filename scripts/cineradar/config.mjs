@@ -61,6 +61,9 @@ export const config = {
   monthlyBudgetEur: boundedNumber("MONTHLY_BUDGET_EUR", 5, { min: 0, max: 5 }),
   monthlyTargetEur: boundedNumber("MONTHLY_TARGET_EUR", 3, { min: 0, max: 3 }),
   optionalStopEur: boundedNumber("OPTIONAL_STOP_EUR", 4, { min: 0, max: 4 }),
+  // Exa has its own owner-approved pool (2026-09-28); the database caps it at 9.
+  exaMonthlyBudgetEur: boundedNumber("EXA_MONTHLY_BUDGET_EUR", 9, { min: 0, max: 9 }),
+  exaMonthlyTargetEur: boundedNumber("EXA_MONTHLY_TARGET_EUR", 7, { min: 0, max: 9 }),
   usdToEurRate: boundedNumber("USD_TO_EUR_RATE", 1, { min: 1, max: 1.5 }),
   cloudflareDailyNeuronLimit: boundedNumber("CLOUDFLARE_DAILY_NEURON_LIMIT", 9000, { min: 0, max: 10000, integer: true }),
   historicalPageLimit: boundedNumber("HISTORICAL_PAGE_LIMIT", 10, { min: 5, max: 20, integer: true }),

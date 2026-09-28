@@ -72,6 +72,7 @@ async function main() {
 
   const elapsedDays = Math.max(1, (now.getTime() - start.getTime()) / 86_400_000);
   const runRateDemand = budget.spendEur / elapsedDays * daysInUtcMonth(now);
+  const exaRunRateDemand = budget.exaSpendEur / elapsedDays * daysInUtcMonth(now);
   const gapAttempts = attempts.filter((attempt) => attempt.attempt_kind === "gap-search");
   const totalOf = (items, field) => items.reduce((sum, item) =>
     sum + finiteNonnegative(item[field]), 0);
@@ -86,7 +87,15 @@ async function main() {
     generated_at: now.toISOString(),
     ledger: {
       events: rows.length,
-      month_to_date_cost_eur: budget.spendEur,
+      month_to_date_cost_eur: Number((budget.spendEur + budget.exaSpendEur).toFixed(8)),
+      core_pool_cost_eur: budget.spendEur,
+      exa_pool: {
+        month_to_date_cost_eur: budget.exaSpendEur,
+        monthly_budget_eur: budget.exaBudgetEur,
+        mode: budget.exaMode,
+        current_run_rate_demand_eur: Number(exaRunRateDemand.toFixed(2)),
+        current_run_rate_enforced_max_eur: Number(Math.min(exaRunRateDemand, budget.exaBudgetEur).toFixed(2)),
+      },
       utilization: Number(budget.utilization.toFixed(4)),
       mode: budget.mode,
       monthly_budget_eur: budget.budgetEur,

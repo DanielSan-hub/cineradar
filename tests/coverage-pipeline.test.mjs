@@ -167,3 +167,27 @@ test("first checks are spread and categories map from dataset labels", () => {
   assert.ok(datasetCategories("residency").includes("residency"));
   assert.equal(chapman(100, 100, 50), 199);
 });
+
+test("official-site picking skips platforms and requires a name match", async () => {
+  const { pickOfficialSite } = await import("../scripts/cineradar/registry-seeds.mjs");
+  const results = [
+    { url: "https://filmfreeway.com/NightOwlShorts", title: "Night Owl Shorts - FilmFreeway" },
+    { url: "https://www.imdb.com/event/ev123", title: "Night Owl Shorts Festival - IMDb" },
+    { url: "https://example-news.com/article", title: "Ten festivals to submit to" },
+    { url: "https://nightowlshorts.org/submit", title: "Submit | Night Owl Shorts" },
+  ];
+  assert.equal(pickOfficialSite("Night Owl Shorts 2026", results), "https://nightowlshorts.org/submit");
+  assert.equal(pickOfficialSite("Night Owl Shorts", results.slice(0, 3)), null);
+  assert.equal(pickOfficialSite("Tribeca", [{ url: "https://news.example.org/tribeca", title: "Tribeca news" }]), null);
+  assert.equal(pickOfficialSite("Tribeca", [{ url: "https://tribecafilm.com/festival", title: "Festival" }]), "https://tribecafilm.com/festival");
+  // Listings, news and similarly named organisations are rejected by the host rule.
+  const british = [
+    { url: "https://www.festivalreel.com/british-documentary-film-festival", title: "British Documentary Film Festival" },
+    { url: "https://www.bifa.film/", title: "British Independent Film Awards" },
+  ];
+  assert.equal(pickOfficialSite("British Independent Film Festival", british), null);
+  assert.equal(pickOfficialSite("Entre Deux Cannes", [{ url: "https://www.nicematin.com/culture/entre-deux-cannes", title: "Entre Deux Cannes le festival" }]), null);
+  // Acronym domains are accepted.
+  assert.equal(pickOfficialSite("Burano Artificial Intelligence Film Festival", [{ url: "https://baiff.eu/", title: "Burano Artificial Intelligence Film Festival" }]), "https://baiff.eu/");
+  assert.equal(pickOfficialSite("Amsterdam Lift-Off Film Festival", [{ url: "https://liftoff.network/amsterdam/", title: "Amsterdam Lift-Off Film Festival" }]), "https://liftoff.network/amsterdam/");
+});
