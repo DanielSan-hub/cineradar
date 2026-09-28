@@ -14,6 +14,9 @@ export type OpportunityCategory =
   | "Residency"
   | "Advertising competition";
 
+export type ReviewDecision = "pending" | "approved" | "rejected" | "archived";
+export type ReviewView = "pending" | "approved" | "rejected";
+
 export type AiPolicy = "allowed" | "required" | "restricted" | "unclear";
 export type OpportunitySortMode = "urgent" | "newest" | "prize";
 export type DeadlineStatus = "confirmed" | "estimated" | "unknown" | "rolling";
@@ -69,6 +72,9 @@ export type Opportunity = {
   discoveredAt: string;
   verifiedAt: string | null;
   reviewRequired?: boolean;
+  reviewDecision?: ReviewDecision;
+  reviewReason?: string | null;
+  updatedAt?: string | null;
   hasConflict?: boolean;
   previousStatus?: OpportunityStatus | null;
   previousDeadline?: string | null;

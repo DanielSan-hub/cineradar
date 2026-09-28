@@ -300,7 +300,18 @@ Relevant migrations have been applied to live Supabase through
 
 ### 1. Build the human review workflow
 
-`/team` is currently read-only and loads at most 50 rows. Add authenticated,
+Status 2026-09-26: implemented in the working tree, not yet live. It adds
+`supabase/migrations/202609260001_review_workflow.sql` (`review_decision`,
+append-only `opportunity_review_events`, atomic `apply_opportunity_review`
+RPC, a trigger that stops automated writers from rewriting approved fields,
+and an RLS policy that also requires `review_decision='approved'` and
+`verified_at`), `/team` tabs with pagination, and `/team/review/[id]`. The
+migration was exercised end-to-end in PGlite, but it must still be applied to
+live Supabase (SQL editor) before deploying; until then the UI shows the queue
+read-only. Publishing still needs a verified official URL, so run
+`radar:revalidate` after editing URLs.
+
+Original brief: `/team` was read-only and loaded at most 50 rows. Add authenticated,
 server-side reviewer actions with no service credential in the browser. At a
 minimum the reviewer must be able to:
 

@@ -10,11 +10,14 @@ import {
   buildOpportunitiesSearchParams,
   normalizeOpportunityQuery,
 } from "@/lib/opportunity-pagination.mjs";
+import { reviewViewFilter } from "@/lib/review-workflow.mjs";
 import type {
   OpportunitiesPage,
   Opportunity,
   OpportunityPageOptions,
   PipelineHealth,
+  ReviewDecision,
+  ReviewView,
   UrlVerificationStatus,
 } from "@/lib/types";
 
@@ -25,6 +28,7 @@ const publishedStatuses = new Set(["verified", "open", "closing-soon", "closed"]
 const integrityOpportunityFields = new Set(INTEGRITY_OPPORTUNITY_FIELDS);
 let integritySchemaSupport: Promise<boolean> | undefined;
 let temporalReviewSupport: Promise<boolean> | undefined;
+let reviewWorkflowSupport: Promise<boolean> | undefined;
 
 export const DEFAULT_OPPORTUNITIES_PAGE_SIZE = 24;
 export const MAX_OPPORTUNITIES_PAGE_SIZE = 50;
@@ -199,6 +203,9 @@ export function mapOpportunityRecord(record: JsonRecord): Opportunity {
     discoveredAt: String(record.discovered_at),
     verifiedAt,
     reviewRequired: Boolean(record.review_required),
+    reviewDecision: (nullableString(record.review_decision) ?? undefined) as ReviewDecision | undefined,
+    reviewReason: nullableString(record.review_reason),
+    updatedAt: nullableString(record.updated_at),
     hasConflict: Boolean(record.has_conflict),
     previousStatus: nullableString(record.previous_status) as Opportunity["previousStatus"],
     previousDeadline: nullableString(record.previous_deadline),
@@ -206,23 +213,25 @@ export function mapOpportunityRecord(record: JsonRecord): Opportunity {
   };
 }
 
-async function supabaseRequest(
+export async function supabaseRequest(
   path: string,
   key: string | undefined,
-  init?: RequestInit,
+  init?: RequestInit & { fresh?: boolean },
 ) {
   if (!SUPABASE_URL || !key) {
     throw new Error("Supabase is not configured");
   }
+  const { fresh, ...requestInit } = init ?? {};
   const response = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
-    ...init,
+    ...requestInit,
     headers: {
       apikey: key,
       Authorization: `Bearer ${key}`,
       "Content-Type": "application/json",
-      ...(init?.headers ?? {}),
+      ...(requestInit.headers ?? {}),
     },
-    next: { revalidate: 300 },
+    // Review screens must reflect reviewer actions immediately.
+    ...(fresh ? { cache: "no-store" as const } : { next: { revalidate: 300 } }),
   });
   if (!response.ok) {
     throw new Error(`Supabase ${response.status}: ${await response.text()}`);
@@ -242,6 +251,23 @@ async function supportsTemporalReview() {
     throw error;
   });
   return temporalReviewSupport;
+}
+
+/** True once the review workflow migration (review_decision + RPC) is applied. */
+export async function supportsReviewWorkflow() {
+  reviewWorkflowSupport ??= supabaseRequest(
+    "opportunities?select=review_decision&limit=1",
+    SUPABASE_SERVICE_ROLE_KEY,
+    { fresh: true },
+  ).then(() => true).catch((error: unknown) => {
+    // Not cached: the migration can be applied without a redeploy.
+    reviewWorkflowSupport = undefined;
+    if (/Supabase 400:.*(?:review_decision|PGRST204|42703)/i.test(String(error))) {
+      return false;
+    }
+    throw error;
+  });
+  return reviewWorkflowSupport;
 }
 
 function clampPageOptions(options?: OpportunityPageOptions) {
@@ -381,44 +407,61 @@ export async function getOpportunities(): Promise<{
 }
 
 export async function getReviewQueue(
-  options?: OpportunityPageOptions,
-): Promise<OpportunitiesPage> {
+  options?: OpportunityPageOptions & { view?: ReviewView },
+): Promise<OpportunitiesPage & { reviewWorkflow: boolean }> {
   const { limit, offset } = clampPageOptions(options);
   if (!SUPABASE_URL && !SUPABASE_SERVICE_ROLE_KEY) {
-    return getDemoPage({ limit, offset }, ["signal", "discovered"]);
+    return {
+      ...getDemoPage({ limit, offset }, ["signal", "discovered"]),
+      reviewWorkflow: false,
+    };
   }
   if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-    return buildPage([], 0, limit, offset, false, "review-query-unavailable");
+    return {
+      ...buildPage([], 0, limit, offset, false, "review-query-unavailable"),
+      reviewWorkflow: false,
+    };
   }
 
+  let reviewWorkflow = false;
   try {
-    const temporal = await supportsTemporalReview();
+    reviewWorkflow = await supportsReviewWorkflow();
+    const temporal = reviewWorkflow || await supportsTemporalReview();
+    // Before the review workflow migration only the pending queue exists.
+    const filter: Record<string, string> = reviewWorkflow
+      ? reviewViewFilter(options?.view)
+      : temporal
+        ? { or: "(status.in.(signal,discovered),review_required.eq.true)", order: "discovered_at.desc,id.asc" }
+        : { status: "in.(signal,discovered)", order: "discovered_at.desc,id.asc" };
     const query = new URLSearchParams({
       select: "*",
-      ...(temporal
-        ? { or: "(status.in.(signal,discovered),review_required.eq.true)" }
-        : { status: "in.(signal,discovered)" }),
-      order: "discovered_at.desc,id.asc",
+      ...filter,
       limit: String(limit),
       offset: String(offset),
     });
     const response = await supabaseRequest(
       `opportunities?${query.toString()}`,
       SUPABASE_SERVICE_ROLE_KEY,
-      { headers: { Prefer: "count=exact" } },
+      { headers: { Prefer: "count=exact" }, fresh: true },
     );
     const records = (await response.json()) as JsonRecord[];
     const total = responseTotal(response, offset + records.length);
-    return buildPage(
-      records.map(mapOpportunityRecord),
-      total,
-      limit,
-      offset,
-      false,
-    );
+    return {
+      ...buildPage(
+        records.map(mapOpportunityRecord),
+        total,
+        limit,
+        offset,
+        false,
+      ),
+      reviewWorkflow,
+    };
   } catch (error) {
     console.error("Unable to load the live review queue", error);
-    return buildPage([], 0, limit, offset, false, "review-query-failed");
+    return {
+      ...buildPage([], 0, limit, offset, false, "review-query-failed"),
+      reviewWorkflow,
+    };
   }
 }
 

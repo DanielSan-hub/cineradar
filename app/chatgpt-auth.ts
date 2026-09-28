@@ -35,6 +35,15 @@ export async function requireTeamUser(returnTo: string): Promise<ChatGPTUser> {
   return user;
 }
 
+/** Non-redirecting check for mutations: null unless allowlisted. */
+export async function getTeamUser(): Promise<ChatGPTUser | null> {
+  const user = await getChatGPTUser();
+  if (!user) return null;
+  return isAuthorizedTeamEmail(user.email, process.env.CINERADAR_TEAM_EMAILS)
+    ? user
+    : null;
+}
+
 export function chatGPTSignInPath(returnTo: string): string {
   const safeReturnTo = safeRelativeReturnPath(returnTo);
   return `${SIGN_IN_PATH}?return_to=${encodeURIComponent(safeReturnTo)}`;
