@@ -42,7 +42,7 @@ without explicit owner approval.
   `git.chatgpt-team.site`
 - Sites project ID: `appgprj_6ab16fb1a1808191930b2f2af75904d2`
 - Production URL: `https://cineradar.danielmaker.chatgpt.site`
-- Current production version: 10
+- Current production version: 11 (review workflow, deployed 2026-09-28 by the owner via Codex)
 - Current access mode: public
 - Current Sites environment revision: 11
 - Production deployment status at handoff: active/succeeded
@@ -319,7 +319,15 @@ deadline block every public status; it must be applied live too. With it, 22
 records pass the gate as `verified` and 1 as `open`. That is not a list to
 approve: it contains three likely duplicate pairs (FeatureLab 2027, AIDFF 15th,
 BFI Innovation Challenge Fund), a 2016 archive page (`1dc52b64`) and several
-generic landing-page URLs. The review UI is not deployed yet.
+generic landing-page URLs. Both migrations and the review UI are now live.
+
+Published 2026-09-28 on the owner's instruction without human review: six
+records (FeatureLab 2027 `open`; PixLight, AIDFF 15th, Prix Ars Electronica
+2027, AI Filmfest Athens 2026, 54th Athens Int'l Film + Video Festival as
+`verified`), each checked against its official page. They are audited under
+`claude-code-agent@cineradar.invalid` so they can be re-reviewed by a human.
+Two duplicates were archived and the 2016 archive page rejected. The other
+pending records had past deadlines, generic pages or old editions.
 
 Original brief: `/team` was read-only and loaded at most 50 rows. Add authenticated,
 server-side reviewer actions with no service credential in the browser. At a
