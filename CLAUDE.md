@@ -311,6 +311,8 @@ Relevant migrations have been applied to live Supabase through
 `202609250001_human_review_gate.sql`. `pnpm radar:audit` reports
 `SCHEMA_MODE=integrity-columns`, and the temporal schema assertion passes.
 
+The prioritised product roadmap (team value first) is in `ROADMAP.md`.
+
 ## Highest-priority implementation work
 
 ### 1. Build the human review workflow
