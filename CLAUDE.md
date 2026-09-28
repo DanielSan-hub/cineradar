@@ -37,6 +37,14 @@ without a live deadline under automatic watch, and flags only undecidable
 records `needs-human` (the default `/team` view). Decisions go through the
 audited RPC as `auto-review@cineradar.invalid`, are reversible, and are capped
 at 15 approvals per run. Facts are still never invented.
+Incident 2026-09-29: the first auto-review run (v1) published 11 bad records
+(deadline-tier titles, a listing page, an accreditation, a youth jury, an
+illustration contest, a duplicate, general art residencies read from a news
+listing). They were reopened within the hour and re-decided under v2, which
+adds: deadline-label and multi-plural titles rejected, non-submission calls
+rejected, film/moving-image relevance required (else human; other disciplines
+rejected), listing URLs as official page escalated, duplicates among pending.
+Public catalogue after correction: 11 records.
 
 Owner approval 2026-09-28: Exa has its own budget pool of at most 9/month
 (ledger units; USD is counted 1:1 so real spend stays <= USD 9). All other

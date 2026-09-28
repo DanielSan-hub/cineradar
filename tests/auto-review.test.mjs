@@ -7,6 +7,8 @@ const NOW = Date.parse("2026-09-29T10:00:00Z");
 const DAY = 86_400_000;
 const live = Object.freeze({
   title: "KINO Athens Submissions",
+  summary: "KINO Athens accepts films throughout the year from every genre.",
+  category: "Traditional festival",
   organizer: "KINO Athens",
   status: "discovered",
   deadline: new Date(NOW + 60 * DAY).toISOString(),
@@ -64,4 +66,21 @@ test("duplicates are archived and records without a live deadline are watched", 
   assert.equal(autoReviewDecision({ ...live, deadline: null, deadline_status: "unknown" }, { now: NOW }).decision, "watch");
   assert.equal(autoReviewDecision({ ...live, deadline: new Date(NOW + DAY).toISOString() }, { now: NOW }).decision, "watch");
   assert.equal(autoReviewDecision({ ...live, deadline: null, deadline_status: "rolling" }, { now: NOW, page: goodPage }).decision, "approve");
+});
+
+test("regressions from the first automatic run are rejected or escalated", () => {
+  const page = goodPage;
+  const decide = (row) => autoReviewDecision({ ...live, ...row }, { now: NOW, page });
+  // Deadline tiers, lists, accreditations, juries and other disciplines.
+  for (const title of ["Earlybird Deadline: October 25, 2026", "Late Deadline: January 10, 2027", "AI Film Festivals, Events & Competitions", "Accreditation Paris 2026", "2027 Youth Jury applications open"]) {
+    assert.equal(decide({ title, summary: "Submit your film" }).decision, "reject", title);
+  }
+  assert.equal(decide({ title: "Next ILLUST Award 2026", summary: "イラストコンテスト", category: "Grant" }).decision, "reject");
+  // No film element stated, or an official page that is a listing: a human decides.
+  assert.equal(decide({ title: "viviON CREATOR AWARD", summary: "偏愛をテーマにした公募アワードです。", category: "Grant" }).decision, "human");
+  assert.equal(decide({ title: "dot.ateliers: 2027 Artist Residency", summary: "Residency for artists", category: "Residency", official_url: "https://on-the-move.org/news?page=0" }).decision, "human");
+  // Real film calls still pass.
+  assert.equal(decide({ title: "2027 Inside Out 2SLGBTQ+ Film Festival", summary: "Submit your film" }).decision, "approve");
+  assert.equal(decide({ title: "The lim² 2027 Call for Projects", summary: "Call for projects for the lim² 2027 program", category: "Grant" }).decision, "human");
+  assert.equal(decide({ title: "AI Movie Awards London", summary: "Submit your AI film, music video, or art." }).decision, "approve");
 });

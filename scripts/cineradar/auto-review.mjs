@@ -67,16 +67,19 @@ function findDuplicates(rows) {
   // Titles that differ only in extra words ("AIDFF" vs "AIDFF 3-9 December")
   // still name the same edition of an already published record.
   const tokens = (row) => new Set(seriesKey(row.title).split(" ").filter((token) => token.length > 2));
-  const approved = rows.filter((row) => row.review_decision === "approved");
-  for (const row of rows) {
+  const similar = (left, right) => {
+    const mine = tokens(left);
+    const theirs = tokens(right);
+    if (mine.size < 2 || theirs.size < 2) return false;
+    const shared = [...mine].filter((token) => theirs.has(token)).length;
+    return shared / Math.min(mine.size, theirs.size) >= 0.7 && (editionYear(left) ?? 0) === (editionYear(right) ?? 0);
+  };
+  // Compare every pending record with better-ranked records (approved first,
+  // then stronger pending ones), so near-identical pairs keep one record.
+  const ordered = [...rows].sort((left, right) => rank(right) - rank(left));
+  for (const [index, row] of ordered.entries()) {
     if (row.review_decision !== "pending" || duplicates.has(row.id)) continue;
-    const mine = tokens(row);
-    if (mine.size < 2) continue;
-    const match = approved.find((other) => {
-      const theirs = tokens(other);
-      const shared = [...mine].filter((token) => theirs.has(token)).length;
-      return shared / Math.min(mine.size, theirs.size) >= 0.7 && (editionYear(row) ?? 0) === (editionYear(other) ?? 0);
-    });
+    const match = ordered.slice(0, index).find((other) => !duplicates.has(other.id) && similar(row, other));
     if (match) duplicates.set(row.id, match);
   }
   return duplicates;
@@ -134,7 +137,7 @@ async function rpc(row, action, reason, { targetStatus = null, changes = {} } = 
   }).catch((error) => ({ ok: false, error: error.message }));
 }
 
-const fields = "id,title,organizer,category,status,deadline,deadline_status,official_url,official_url_status,source_url,source_type,source_url_status,has_conflict,confidence,review_reason,review_decision,edition_year,raw_payload,updated_at";
+const fields = "id,title,organizer,category,summary,status,deadline,deadline_status,official_url,official_url_status,source_url,source_type,source_url_status,has_conflict,confidence,review_reason,review_decision,edition_year,raw_payload,updated_at";
 const rows = await all(`opportunities?select=${fields}&review_decision=in.(pending,approved)&order=id.asc`);
 const pending = rows.filter((row) => row.review_decision === "pending");
 const duplicates = findDuplicates(rows);
