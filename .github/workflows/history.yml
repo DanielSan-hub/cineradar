@@ -20,6 +20,7 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22
+          package-manager-cache: false
       - name: Backfill evidence from 2023 with bounded direct HTTP
         run: node scripts/cineradar/history-backfill.mjs
         env:

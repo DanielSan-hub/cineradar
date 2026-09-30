@@ -20,6 +20,7 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22
+          package-manager-cache: false
       - name: Report stale records without LLM or auto-closing
         run: node scripts/cineradar/stale-check.mjs
         env:
