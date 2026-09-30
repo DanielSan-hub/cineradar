@@ -32,6 +32,25 @@ async function supabaseResponse(path, init = {}) {
   });
 }
 
+/**
+ * GET rows whose `column` is in `values`, in chunks: a single `in.(...)` list
+ * of hundreds of UUIDs makes the URL too long and the gateway answers 400.
+ *
+ * @param {string} table
+ * @param {string} select
+ * @param {string} column
+ * @param {string[]} values
+ */
+export async function selectIn(table, select, column, values, { chunk = 100 } = {}) {
+  const rows = [];
+  const unique = [...new Set(values.filter(Boolean))];
+  for (let index = 0; index < unique.length; index += chunk) {
+    const batch = unique.slice(index, index + chunk);
+    rows.push(...await supabase(`${table}?select=${select}&${column}=in.(${batch.join(",")})&limit=${chunk * 20}`));
+  }
+  return rows;
+}
+
 export async function supabase(path, init = {}) {
   const response = await supabaseResponse(path, init);
   if (!response.ok) throw new Error(`Supabase ${response.status}: ${await response.text()}`);

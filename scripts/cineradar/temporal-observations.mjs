@@ -356,6 +356,7 @@ export async function persistTemporalObservations(
     seriesCreated: 0,
     editionsCreated: 0,
     entityEvidenceSkipped: 0,
+    entityConflictsSkipped: 0,
     conflictsObserved: 0,
   };
 
@@ -390,11 +391,21 @@ export async function persistTemporalObservations(
     const evidence = temporalEntityEvidence(record, source);
     let entities = null;
     if (evidence) {
-      entities = await persistEntities(client, evidence, record, source, observedAt);
-      if (
-        stored.opportunity_edition_id
-        && stored.opportunity_edition_id !== entities.editionId
-      ) throw new Error("TEMPORAL_OPPORTUNITY_EDITION_CONFLICT");
+      try {
+        entities = await persistEntities(client, evidence, record, source, observedAt);
+        if (
+          stored.opportunity_edition_id
+          && stored.opportunity_edition_id !== entities.editionId
+        ) throw new Error("TEMPORAL_OPPORTUNITY_EDITION_CONFLICT");
+      } catch (error) {
+        // Two organizers or editions resolving to one series identity must not
+        // be merged, but one ambiguous record must not abort the whole run:
+        // keep the observation and leave this record unlinked.
+        if (!/^TEMPORAL_(?:SERIES_(?:ORGANIZER|IDENTITY)_CONFLICT|OPPORTUNITY_EDITION_CONFLICT)$/.test(error.message)) throw error;
+        console.warn(`Series link skipped for ${record.canonical_key}: ${error.message}`);
+        counts.entityConflictsSkipped += 1;
+        entities = null;
+      }
     } else {
       counts.entityEvidenceSkipped += 1;
     }

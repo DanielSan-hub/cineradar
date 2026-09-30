@@ -27,6 +27,7 @@ import {
 import {
   assertSourceRegistrySchema,
   finishRun,
+  selectIn,
   startRun,
   supabase,
 } from "./supabase.mjs";
@@ -249,7 +250,7 @@ try {
   });
   const sourceIds = sources.map((source) => source.id);
   const checkpointRows = sourceIds.length
-    ? await supabase(`source_checkpoints?select=*&source_id=in.(${sourceIds.join(",")})&limit=2000`)
+    ? await selectIn("source_checkpoints", "*", "source_id", sourceIds)
     : [];
   const checkpointBySource = new Map(checkpointRows.map((row) => [row.source_id, row]));
   const plans = sources.map((source) => {

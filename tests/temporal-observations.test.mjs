@@ -137,6 +137,7 @@ test("persistence creates observed editions, never forecasts, then replays idemp
     seriesCreated: 1,
     editionsCreated: 2,
     entityEvidenceSkipped: 0,
+    entityConflictsSkipped: 0,
     conflictsObserved: 0,
   });
   const [series] = db.tables.event_series.values();
@@ -155,6 +156,25 @@ test("persistence creates observed editions, never forecasts, then replays idemp
   assert.equal(replay.observationsInserted, 0);
   assert.equal(replay.observationsReplayed, 1);
   assert.equal(db.tables.opportunity_editions.size, 2);
+});
+
+test("a series owned by another organizer is left unlinked instead of aborting the run", async () => {
+  const db = fakeClient();
+  const one = record(2025);
+  const two = record(2026);
+  await persistTemporalObservations(
+    [one], [{ id: "op-2025", canonical_key: one.canonical_key }], "run-one",
+    { client: db.client, sourceRows: [source] },
+  );
+  // Another organizer now owns the series identity this record resolves to.
+  for (const series of db.tables.event_series.values()) series.organizer_id = "someone-else";
+  const result = await persistTemporalObservations(
+    [two], [{ id: "op-2026", canonical_key: two.canonical_key }], "run-two",
+    { client: db.client, sourceRows: [source] },
+  );
+  assert.equal(result.entityConflictsSkipped, 1);
+  assert.equal(result.observationsInserted, 1);
+  assert.equal(result.editionsCreated, 0);
 });
 
 test("unsupported deadline claims are omitted and database failures propagate", async () => {

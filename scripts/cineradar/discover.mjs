@@ -41,6 +41,7 @@ import {
   assertTemporalSchema,
   finishRun,
   ingest,
+  selectIn,
   startRun,
   supabase,
 } from "./supabase.mjs";
@@ -219,9 +220,7 @@ async function pendingKnownSourceCandidates(limit) {
     .sort((left, right) => Date.parse(left.last_changed_at ?? 0) - Date.parse(right.last_changed_at ?? 0));
   const sourceIds = [...new Set(pending.map((row) => row.source_id).filter(Boolean))];
   if (!sourceIds.length) return [];
-  const sources = await supabase(
-    `sources?select=id,name,source_type&id=in.(${sourceIds.join(",")})&limit=2000`,
-  );
+  const sources = await selectIn("sources", "id,name,source_type", "id", sourceIds);
   const sourceById = new Map(sources.map((source) => [source.id, source]));
   return pending.slice(0, limit).map((row) => {
     const source = sourceById.get(row.source_id);
@@ -392,8 +391,11 @@ async function creditKnownSourceYield(records, insertedKeys, processedPages) {
   }
   const ids = [...bySource.keys()];
   if (!ids.length) return { sourcesCredited: 0, uniqueDiscoveries: 0 };
-  const rows = await supabase(
-    `sources?select=id,url,check_count,successful_discoveries,unique_discoveries,false_positive_count&id=in.(${ids.join(",")})&limit=2000`,
+  const rows = await selectIn(
+    "sources",
+    "id,url,check_count,successful_discoveries,unique_discoveries,false_positive_count",
+    "id",
+    ids,
   );
   if (rows.length !== ids.length) throw new Error("SOURCE_YIELD_SOURCE_MISSING");
   let uniqueDiscoveries = 0;
@@ -591,6 +593,11 @@ try {
   incrementMetric(metrics, "updated", result.updated);
   incrementMetric(metrics, "duplicates", result.legacyCollapsed);
   await persistProvenance(deduped.records, result.records, run.id);
+  // Mark pages processed as soon as their records are stored, so a later
+  // bookkeeping failure never makes the next run re-extract (and re-pay for)
+  // the same pages.
+  await markPagesProcessed(successfulPages);
+  await markDiscoveredUrlsProcessed(successfulPages);
   const temporal = await persistTemporalObservations(
     deduped.records,
     result.records,
@@ -622,8 +629,6 @@ try {
     newSources,
     successfulPages,
   );
-  await markPagesProcessed(successfulPages);
-  await markDiscoveredUrlsProcessed(successfulPages);
 
   await finishRun(run.id, metricsRunPatch(metrics));
   console.log(JSON.stringify({
