@@ -297,7 +297,12 @@ async function persistEntities(client, evidence, record, source, observedAt) {
     if (latest > earliest && !series.recurring) patch.recurring = true;
     if (organizer && !series.organizer_id) patch.organizer_id = organizer.id;
     if (Object.keys(patch).length) {
-      patch.last_seen_at = observedAt;
+      // A page observed before this series row was created (e.g. from the URL
+      // cache) must not move last_seen_at before first_seen_at or backwards.
+      const seenTimes = [observedAt, series.last_seen_at, series.first_seen_at]
+        .map((value) => Date.parse(value))
+        .filter(Number.isFinite);
+      patch.last_seen_at = new Date(Math.max(...seenTimes)).toISOString();
       await client(`event_series?id=eq.${encodeURIComponent(series.id)}`, {
         method: "PATCH",
         prefer: "return=minimal",

@@ -33,7 +33,7 @@ jobs:
           GROQ_FALLBACK_ENABLED: "false"
           DISCOVERY_QUERY_LIMIT: "6"
           DISCOVERY_RESULT_LIMIT: "5"
-          MAX_LLM_CALLS_PER_RUN: "80"
+          MAX_LLM_CALLS_PER_RUN: "60"
           FREE_PROCESSING_LIMIT: "300"
           HTTP_TIMEOUT_MS: "12000"
           LLM_TIMEOUT_MS: "45000"

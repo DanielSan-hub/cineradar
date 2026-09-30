@@ -177,6 +177,28 @@ test("a series owned by another organizer is left unlinked instead of aborting t
   assert.equal(result.editionsCreated, 0);
 });
 
+test("a page observed before the series row existed never moves last_seen_at before first_seen_at", async () => {
+  const db = fakeClient();
+  const one = record(2025);
+  const two = record(2026);
+  await persistTemporalObservations(
+    [one], [{ id: "op-2025", canonical_key: one.canonical_key }], "run-one",
+    { client: db.client, sourceRows: [source] },
+  );
+  const future = "2099-01-01T00:00:00.000Z";
+  for (const series of db.tables.event_series.values()) {
+    series.first_seen_at = future;
+    series.last_seen_at = future;
+  }
+  await persistTemporalObservations(
+    [two], [{ id: "op-2026", canonical_key: two.canonical_key }], "run-two",
+    { client: db.client, sourceRows: [source] },
+  );
+  for (const series of db.tables.event_series.values()) {
+    assert.ok(Date.parse(series.last_seen_at) >= Date.parse(series.first_seen_at));
+  }
+});
+
 test("unsupported deadline claims are omitted and database failures propagate", async () => {
   const db = fakeClient();
   const item = record(2026, {
