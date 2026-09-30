@@ -110,6 +110,19 @@ function datasetFamily(categories, url) {
 const ACTIONABLE_STATUS = /^(?:open|upcoming|rolling|announced|in_progress)/i;
 
 /**
+ * Only a dataset's official_url is the organizer's own page. A source_url is
+ * often an article, directory or aggregator: its type follows the dataset's
+ * own source_type label, so pages from it are never treated as official.
+ */
+export function datasetSourceType(row, url) {
+  if (url === safeSeedUrl(row.official_url)) return "official";
+  const label = String(row.source_type ?? "").toLowerCase();
+  if (/press|news|magazine|article|media/.test(label)) return "press";
+  if (/^(?:official|organizer|official_org_page)$|official hom/.test(label)) return "official";
+  return "community";
+}
+
+/**
  * Source row for one dataset record, or null when it has no usable own URL.
  * Platform URLs are skipped: a series' own site is what gets monitored.
  */
@@ -126,7 +139,7 @@ export function sourceFromDatasetRow(row, { dataset, now = Date.now() } = {}) {
     url,
     tier: actionable ? 1 : 2,
     priority: actionable ? 1 : 2,
-    source_type: "official",
+    source_type: datasetSourceType(row, url),
     source_family: datasetFamily(categories, url),
     country: /^[A-Za-z]{2}$/.test(String(row.country ?? "")) ? String(row.country).toUpperCase() : null,
     region: row.region ? String(row.region).slice(0, 60) : null,

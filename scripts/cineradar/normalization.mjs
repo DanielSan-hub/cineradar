@@ -261,7 +261,7 @@ function groundedUrl(rawValue, context) {
   return grounded ? { url: value, reason: null } : { url: null, reason: "UNGROUNDED_URL" };
 }
 
-const GENERIC_TITLE = /^(?:(?:early\s*-?\s*bird|earlybird|regular|late|final|extended|standard|last)?\s*deadlines?\b.*|call\s+for\s+(?:entries|submissions|projects|applications|films|works)|open\s+calls?|submissions?(?:\s+open)?|entries|apply(?:\s+now)?|how\s+to\s+(?:apply|submit)|registration(?:\s+open)?|workshops?|rules(?:\s+(?:and|&)\s+regulations)?|convocatoria(?:\s+abierta)?|bases|bando|iscrizioni|appel\s+[àa]\s+(?:projets|films|candidatures)|inscri(?:ç|c)(?:õ|o)es|ワークショップ|募集|応募|公募|공모|모집|征集)$/iu;
+const GENERIC_TITLE = /^(?:(?:early\s*-?\s*bird|earlybird|regular|late|final|extended|standard|last)?\s*deadlines?\b.*|(?:open\s+)?call\s+for\s+(?:film\s+|short\s+film\s+)?(?:entries|submissions|projects|applications|films|works)|open\s+calls?|submissions?(?:\s+open)?|entries|apply(?:\s+now)?|how\s+to\s+(?:apply|submit)|registration(?:\s+open)?|workshops?|rules(?:\s+(?:and|&)\s+regulations)?|convocatoria(?:\s+abierta)?|bases|bando|iscrizioni|appel\s+[àa]\s+(?:projets|films|candidatures)|inscri(?:ç|c)(?:õ|o)es|ワークショップ|募集|応募|公募|공모|모집|征集)$/iu;
 
 /** True when a title is only a heading or a deadline tier, not an opportunity's name. */
 export function isGenericTitle(title) {

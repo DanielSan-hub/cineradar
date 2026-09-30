@@ -80,6 +80,31 @@ function findDuplicates(rows) {
     const sameEdition = leftYear === rightYear || ((leftYear === null || rightYear === null) && overlap >= 0.9);
     return overlap >= 0.7 && sameEdition;
   };
+  // Same official site and same deadline: a record titled only as a heading
+  // ("Call for Entry for FFDD27") repeats the named call on that site. Records
+  // with distinct names (Tampere's three competitions) stay separate.
+  const HEADING = /^(?:call\s+for\s+(?:entry|entries|submissions?|films|works)|submissions?|submit(?:\s+your\s+film)?|entries|how\s+to\s+(?:apply|submit))\b/iu;
+  const siteDeadline = new Map();
+  for (const row of rows) {
+    if (!row.deadline) continue;
+    let host = "";
+    try {
+      host = new URL(row.official_url ?? row.source_url).hostname.replace(/^www\./, "");
+    } catch {
+      continue;
+    }
+    const key = `${host}|${String(row.deadline).slice(0, 10)}`;
+    if (!siteDeadline.has(key)) siteDeadline.set(key, []);
+    siteDeadline.get(key).push(row);
+  }
+  for (const group of siteDeadline.values()) {
+    const named = group.filter((row) => !HEADING.test(String(row.title ?? "").trim()))
+      .sort((left, right) => rank(right) - rank(left));
+    if (!named.length) continue;
+    for (const row of group) {
+      if (HEADING.test(String(row.title ?? "").trim()) && !duplicates.has(row.id)) duplicates.set(row.id, named[0]);
+    }
+  }
   // Compare every pending record with better-ranked records (approved first,
   // then stronger pending ones), so near-identical pairs keep one record.
   const ordered = [...rows].sort((left, right) => rank(right) - rank(left));
@@ -109,8 +134,11 @@ async function checkOfficialPage(row) {
     const signal = scoreCallSignal(text);
     const quote = row.raw_payload?.decision_fields?.evidence?.deadline ?? row.raw_payload?.evidence?.deadline_quote ?? null;
     const reread = extractDeadline(text, { title: row.title });
-    const deadlineEvidenceFound = Boolean(quote && fold(text).includes(fold(quote)))
-      || Boolean(reread && row.deadline && reread.deadline === String(row.deadline).slice(0, 10));
+    // The deadline counts as confirmed only when the extractor finds the same
+    // date on the page under its own rules (banners for other calls, labels
+    // and title proximity). A matching quote alone can be a site-wide banner.
+    const deadlineEvidenceFound = Boolean(reread && row.deadline && reread.deadline === String(row.deadline).slice(0, 10));
+    const quoteStillOnPage = Boolean(quote && fold(text).includes(fold(quote)));
     return {
       ok: true,
       url,
@@ -120,6 +148,7 @@ async function checkOfficialPage(row) {
       closed: signal.closed,
       callSignal: signal.pass,
       deadlineEvidenceFound,
+      quoteStillOnPage,
       organizer: siteName(page.html),
     };
   } catch (error) {
@@ -205,6 +234,42 @@ if (apply) {
     if (result) {
       if (result.ok) summary.applied[decision] = (summary.applied[decision] ?? 0) + 1;
       else summary.errors += 1;
+    }
+  }
+}
+
+// Re-check records this automation published earlier against the current
+// rules, so a rule fix also corrects what older versions let through.
+const autoApproved = new Set((await all(
+  "opportunity_review_events?select=opportunity_id&action=eq.approve&reviewer_email=eq.auto-review@cineradar.invalid&order=created_at.asc",
+)).map((event) => event.opportunity_id));
+const recheck = rows
+  .filter((row) => row.review_decision === "approved" && autoApproved.has(row.id))
+  .map((row) => ({
+    row,
+    ...autoReviewDecision(row, {
+      duplicateOf: duplicates.get(row.id) ?? null,
+      genericTitle: isGenericTitle(row.title),
+      page: { ok: true, httpStatus: 200, finalUrl: row.official_url, callSignal: true, deadlineEvidenceFound: true, closed: false, organizer: null },
+    }),
+  }));
+summary.recheck = {
+  published_by_automation: recheck.length,
+  withdraw: recheck.filter((item) => item.decision !== "approve").map((item) => `${item.row.title.slice(0, 55)} — ${item.reasons.join(" ").slice(0, 100)}`),
+  rename: recheck.filter((item) => item.decision === "approve" && Object.keys(item.changes ?? {}).length)
+    .map((item) => `${item.row.title.slice(0, 50)} → ${JSON.stringify(item.changes).slice(0, 110)}`),
+};
+if (apply) {
+  for (const item of recheck) {
+    if (item.decision === "archive") {
+      const result = await rpc(item.row, "archive", `re-check under ${AUTO_REVIEW_VERSION}: ${item.reasons.join(" ")}`);
+      if (!result?.ok) summary.errors += 1;
+    } else if (item.decision !== "approve") {
+      const result = await rpc(item.row, "reopen", `re-check under ${AUTO_REVIEW_VERSION}: ${item.reasons.join(" ")}`);
+      if (!result?.ok) summary.errors += 1;
+    } else if (Object.keys(item.changes ?? {}).length) {
+      const result = await rpc(item.row, "edit", `${AUTO_REVIEW_VERSION} name clean-up from the page's own organizer and title`, { changes: item.changes });
+      if (!result?.ok) summary.errors += 1;
     }
   }
 }

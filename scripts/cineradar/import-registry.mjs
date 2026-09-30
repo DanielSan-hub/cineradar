@@ -185,6 +185,22 @@ if (!onlyWikidata) {
     channel_hosts: channels.size,
   };
   collected.push(...seeded);
+  if (process.argv.includes("--refresh-source-types")) {
+    // Earlier imports marked every dataset URL "official"; correct the type of
+    // already-registered rows (statistics and schedules are not in the payload).
+    const retyped = [...new Map(seeded.filter((row) => row.source_type !== "official")
+      .map((row) => [row.url, { url: row.url, name: row.name, source_type: row.source_type }])).values()];
+    summary.retyped_sources = retyped.length;
+    if (apply) {
+      for (let index = 0; index < retyped.length; index += 500) {
+        await supabase("sources?on_conflict=url", {
+          method: "POST",
+          prefer: "resolution=merge-duplicates,return=minimal",
+          body: JSON.stringify(retyped.slice(index, index + 500)),
+        });
+      }
+    }
+  }
 }
 
 const merged = mergeSeedSources(collected);

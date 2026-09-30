@@ -75,14 +75,14 @@ test("regressions from the first automatic run are rejected or escalated", () =>
   for (const title of ["Earlybird Deadline: October 25, 2026", "Late Deadline: January 10, 2027", "AI Film Festivals, Events & Competitions", "Accreditation Paris 2026", "2027 Youth Jury applications open"]) {
     assert.equal(decide({ title, summary: "Submit your film" }).decision, "reject", title);
   }
-  assert.equal(decide({ title: "Next ILLUST Award 2026", summary: "イラストコンテスト", category: "Grant" }).decision, "reject");
+  assert.equal(decide({ title: "Next ILLUST Award 2026", summary: "イラストコンテスト", category: "Grant", organizer: "PIE International", official_url: "https://compe.japandesign.ne.jp/news/2026/09/87728/" }).decision, "reject");
   // No film element stated, or an official page that is a listing: a human decides.
-  assert.equal(decide({ title: "viviON CREATOR AWARD", summary: "偏愛をテーマにした公募アワードです。", category: "Grant" }).decision, "human");
-  assert.equal(decide({ title: "dot.ateliers: 2027 Artist Residency", summary: "Residency for artists", category: "Residency", official_url: "https://on-the-move.org/news?page=0" }).decision, "human");
+  assert.equal(decide({ title: "viviON CREATOR AWARD", summary: "偏愛をテーマにした公募アワードです。", category: "Grant", organizer: "株式会社viviON", official_url: "https://compe.japandesign.ne.jp/vivion-2026/" }).decision, "human");
+  assert.equal(decide({ title: "dot.ateliers: 2027 Artist Residency", summary: "Residency for artists", category: "Residency", organizer: "dot.ateliers", official_url: "https://on-the-move.org/news?page=0" }).decision, "human");
   // Real film calls still pass.
-  assert.equal(decide({ title: "2027 Inside Out 2SLGBTQ+ Film Festival", summary: "Submit your film" }).decision, "approve");
-  assert.equal(decide({ title: "The lim² 2027 Call for Projects", summary: "Call for projects for the lim² 2027 program", category: "Grant" }).decision, "human");
-  assert.equal(decide({ title: "AI Movie Awards London", summary: "Submit your AI film, music video, or art." }).decision, "approve");
+  assert.equal(decide({ title: "2027 Inside Out 2SLGBTQ+ Film Festival", summary: "Submit your film", organizer: "Inside Out", official_url: "https://www.insideout.ca/home/submissions/" }).decision, "approve");
+  assert.equal(decide({ title: "The lim² 2027 Call for Projects", summary: "Call for projects for the lim² 2027 program", category: "Grant", organizer: "Le Groupe Ouest", official_url: "https://www.legroupeouest.com/en/" }).decision, "human");
+  assert.equal(decide({ title: "AI Movie Awards London", summary: "Submit your AI film, music video, or art.", organizer: "AIMA Productions", official_url: "https://aimovieawards.org/submit/" }).decision, "approve");
 });
 
 test("generic headings are rejected before and after ingestion", async () => {
@@ -94,4 +94,23 @@ test("generic headings are rejected before and after ingestion", async () => {
     assert.equal(isGenericTitle(title), false, title);
   }
   assert.equal(autoReviewDecision(live, { now: NOW, page: goodPage, genericTitle: true }).decision, "reject");
+});
+
+test("v3: the official page must belong to the call; names are cleaned", async () => {
+  const { cleanTitle, cleanOrganizer, pageBelongsToCall } = await import("../lib/auto-review.mjs");
+  // Own sites pass; articles, aggregators and listings do not.
+  assert.equal(pageBelongsToCall({ url: "https://kinoathens.org/en/submissions/", title: "KINO Athens Submissions", organizer: "KINO Athens" }), true);
+  assert.equal(pageBelongsToCall({ url: "https://www.legroupeouest.com/en/", title: "The lim² 2027 Call for Projects", organizer: "Le Groupe Ouest" }), true);
+  assert.equal(pageBelongsToCall({ url: "https://indieshortsmag.com/2026/08/cairo", title: "Cairo International Short Film Festival Confirms December 2026", organizer: "Indie Shorts Mag" }), false);
+  assert.equal(pageBelongsToCall({ url: "https://aifilmcontests.com/guide/october", title: "AI Film Festival Deadlines in October 2026: Every Contest Closing", organizer: "AI Film Contests" }), false);
+  assert.equal(pageBelongsToCall({ url: "https://www.recursosculturales.com/festival-transcinema/", title: "Festival Transcinema", organizer: "Transcinema" }), false);
+  // Clean-up of entities, site suffixes and trailing organizer names.
+  assert.equal(cleanOrganizer("Maker &amp; Smith | Craft & Design"), "Maker & Smith");
+  assert.equal(cleanTitle("Makers Film Festival Submission - Maker & Smith | Craft & Design", "Maker &amp; Smith | Craft"), "Makers Film Festival Submission");
+  // A bare category takes the organizer's name.
+  const tampere = autoReviewDecision({ ...live, title: "International Competition", organizer: "Tampere Film Festival", official_url: "https://tamperefilmfestival.fi/en/industry/competition" }, { now: NOW, page: goodPage });
+  assert.equal(tampere.decision, "approve");
+  assert.equal(tampere.changes.title, "Tampere Film Festival – International Competition");
+  const article = autoReviewDecision({ ...live, title: "Cairo International Short Film Festival Confirms December 2026 Dates", organizer: "Indie Shorts Mag", official_url: "https://indieshortsmag.com/2026/08/cairo" }, { now: NOW, page: goodPage });
+  assert.equal(article.decision, "human");
 });

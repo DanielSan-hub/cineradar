@@ -191,3 +191,12 @@ test("official-site picking skips platforms and requires a name match", async ()
   assert.equal(pickOfficialSite("Burano Artificial Intelligence Film Festival", [{ url: "https://baiff.eu/", title: "Burano Artificial Intelligence Film Festival" }]), "https://baiff.eu/");
   assert.equal(pickOfficialSite("Amsterdam Lift-Off Film Festival", [{ url: "https://liftoff.network/amsterdam/", title: "Amsterdam Lift-Off Film Festival" }]), "https://liftoff.network/amsterdam/");
 });
+
+test("only a dataset's official_url is seeded as an official source", async () => {
+  const { datasetSourceType } = await import("../scripts/cineradar/registry-seeds.mjs");
+  const row = { official_url: "https://fest.example.org/", source_url: "https://indieshortsmag.com/article", source_type: "press" };
+  assert.equal(datasetSourceType(row, "https://fest.example.org/"), "official");
+  assert.equal(datasetSourceType(row, "https://indieshortsmag.com/article"), "press");
+  assert.equal(datasetSourceType({ ...row, source_type: "aggregator" }, "https://indieshortsmag.com/article"), "community");
+  assert.equal(datasetSourceType({ ...row, source_type: "organizer" }, "https://indieshortsmag.com/article"), "official");
+});

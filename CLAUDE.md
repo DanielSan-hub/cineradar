@@ -45,6 +45,17 @@ adds: deadline-label and multi-plural titles rejected, non-submission calls
 rejected, film/moving-image relevance required (else human; other disciplines
 rejected), listing URLs as official page escalated, duplicates among pending.
 Public catalogue after correction: 11 records.
+Update 2026-09-30 (auto-review v3): scheduled runs were failing (monitor: a
+1,000-UUID IN list returned 400, now chunked by `selectIn`; discovery: series
+organizer/last_seen conflicts aborted runs after ingest, now isolated per record
+and pages are marked processed right after ingest). v3 approves only when the
+official page's domain belongs to the call (title or non-publication organizer
+in the domain), requires the extractor itself to re-find the same deadline on
+the page (quotes from site-wide banners no longer count), names bare category
+titles after the organizer, cleans entities/suffixes, treats film institutions'
+names/domains as film context, and re-checks every earlier auto-approval each
+run (withdraws, archives duplicates, renames). Dataset sources are `official`
+only when taken from `official_url` (98 re-typed). Public catalogue: 17.
 
 Owner approval 2026-09-28: Exa has its own budget pool of at most 9/month
 (ledger units; USD is counted 1:1 so real spend stays <= USD 9). All other
