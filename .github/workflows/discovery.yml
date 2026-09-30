@@ -34,7 +34,7 @@ jobs:
           DISCOVERY_QUERY_LIMIT: "6"
           DISCOVERY_RESULT_LIMIT: "5"
           MAX_LLM_CALLS_PER_RUN: "60"
-          FREE_PROCESSING_LIMIT: "300"
+          FREE_PROCESSING_LIMIT: "220"
           HTTP_TIMEOUT_MS: "12000"
           LLM_TIMEOUT_MS: "45000"
           LLM_CONCURRENCY: "3"
