@@ -56,6 +56,11 @@ titles after the organizer, cleans entities/suffixes, treats film institutions'
 names/domains as film context, and re-checks every earlier auto-approval each
 run (withdraws, archives duplicates, renames). Dataset sources are `official`
 only when taken from `official_url` (98 re-typed). Public catalogue: 17.
+Update 2026-10-01: scheduled discovery verified green after three fixes
+(observation key reuse across provenance counted as `observationsRefused`;
+series last_seen_at keeps Postgres microseconds; triage/auto-review write only
+changed rows). Discovery job ~3 min (timeout 15), monitor twice daily x 1,000
+sources (timeout 12); worst-case Actions minutes 1,794/month.
 
 Owner approval 2026-09-28: Exa has its own budget pool of at most 9/month
 (ledger units; USD is counted 1:1 so real spend stays <= USD 9). All other
