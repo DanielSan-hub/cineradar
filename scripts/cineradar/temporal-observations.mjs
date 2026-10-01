@@ -299,10 +299,13 @@ async function persistEntities(client, evidence, record, source, observedAt) {
     if (Object.keys(patch).length) {
       // A page observed before this series row was created (e.g. from the URL
       // cache) must not move last_seen_at before first_seen_at or backwards.
-      const seenTimes = [observedAt, series.last_seen_at, series.first_seen_at]
-        .map((value) => Date.parse(value))
-        .filter(Number.isFinite);
-      patch.last_seen_at = new Date(Math.max(...seenTimes)).toISOString();
+      // Keep the stored string when it is the latest: Postgres keeps
+      // microseconds, and re-serialising through Date would truncate them to
+      // milliseconds and land just before first_seen_at.
+      const latestSeen = [series.first_seen_at, series.last_seen_at, observedAt]
+        .filter((value) => Number.isFinite(Date.parse(value)))
+        .reduce((best, value) => (Date.parse(value) > Date.parse(best) ? value : best));
+      patch.last_seen_at = latestSeen;
       await client(`event_series?id=eq.${encodeURIComponent(series.id)}`, {
         method: "PATCH",
         prefer: "return=minimal",

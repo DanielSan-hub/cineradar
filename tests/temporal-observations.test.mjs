@@ -198,6 +198,21 @@ test("a page observed before the series row existed never moves last_seen_at bef
   for (const series of db.tables.event_series.values()) {
     assert.ok(Date.parse(series.last_seen_at) >= Date.parse(series.first_seen_at));
   }
+  // Postgres keeps microseconds: the stored value must be reused verbatim,
+  // not re-serialised to milliseconds (which would fall before first_seen_at).
+  const micro = "2099-01-01T00:00:00.871617+00:00";
+  for (const series of db.tables.event_series.values()) {
+    series.first_seen_at = micro;
+    series.last_seen_at = micro;
+    series.latest_known_year = 2025;
+  }
+  await persistTemporalObservations(
+    [record(2027)], [{ id: "op-2027", canonical_key: record(2027).canonical_key }], "run-three",
+    { client: db.client, sourceRows: [source] },
+  );
+  for (const series of db.tables.event_series.values()) {
+    assert.equal(series.last_seen_at, micro);
+  }
 });
 
 test("unsupported deadline claims are omitted and database failures propagate", async () => {

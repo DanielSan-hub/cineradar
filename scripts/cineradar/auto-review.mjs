@@ -172,7 +172,7 @@ async function rpc(row, action, reason, { targetStatus = null, changes = {} } = 
   }).catch((error) => ({ ok: false, error: error.message }));
 }
 
-const fields = "id,title,organizer,category,summary,status,deadline,deadline_status,official_url,official_url_status,source_url,source_type,source_url_status,has_conflict,confidence,review_reason,review_decision,edition_year,raw_payload,updated_at";
+const fields = "id,title,organizer,category,summary,status,triage_flags,deadline,deadline_status,official_url,official_url_status,source_url,source_type,source_url_status,has_conflict,confidence,review_reason,review_decision,edition_year,raw_payload,updated_at";
 const rows = await all(`opportunities?select=${fields}&review_decision=in.(pending,approved)&order=id.asc`);
 const pending = rows.filter((row) => row.review_decision === "pending");
 const duplicates = findDuplicates(rows);
@@ -218,9 +218,17 @@ if (apply) {
     } else if (flags) {
       // watch / human: label the queue so people only see what needs them.
       const note = decision === "human" ? `Needs review: ${reasons.join(" ")}` : null;
-      const current = await supabase(`opportunities?select=triage_flags,review_reason&id=eq.${row.id}`);
+      const current = [row];
       const kept = (current[0]?.triage_flags ?? []).filter((flag) => flag !== "needs-human" && flag !== "watching");
-      const fp = /false-positive candidate/i.test(String(current[0]?.review_reason ?? "")) ? `${current[0].review_reason} ` : "";
+      const label = decision === "human" ? "needs-human" : "watching";
+      const unchanged = (row.triage_flags ?? []).includes(label)
+        && !(row.triage_flags ?? []).includes(label === "watching" ? "needs-human" : "watching")
+        && (!note || String(row.review_reason ?? "").includes(note));
+      if (unchanged) {
+        summary.applied.unchanged = (summary.applied.unchanged ?? 0) + 1;
+        continue;
+      }
+      const fp = /false-positive candidate/i.test(String(current[0]?.review_reason ?? "")) ? `${String(current[0].review_reason).replace(/s*Needs review:.*$/s, "")} ` : "";
       await supabase(`opportunities?id=eq.${row.id}&review_decision=eq.pending`, {
         method: "PATCH",
         prefer: "return=minimal",

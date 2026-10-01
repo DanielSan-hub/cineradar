@@ -3,8 +3,8 @@ name: CineRadar source monitor
 on:
   workflow_dispatch:
   schedule:
-    # Three runs a day keep ~15k registry sources on their polling schedules.
-    - cron: "43 0,8,16 * * *"
+    # Two runs of 1,000 sources a day cover the registry's adaptive schedules.
+    - cron: "43 4,16 * * *"
 
 concurrency:
   group: cineradar-pipeline

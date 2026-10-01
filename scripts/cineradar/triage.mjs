@@ -29,7 +29,7 @@ const columns = await supportsTriageColumns();
 const rows = [];
 for (let offset = 0; ; offset += 1000) {
   const batch = await supabase(
-    `opportunities?select=id,title,status,deadline,deadline_status,official_url,official_url_status,source_type,source_url_status,organizer,has_conflict,max_runtime_minutes,ai_policy,entry_fee_amount,application_url,eligibility,confidence,review_reason,updated_at&review_decision=eq.pending&order=id.asc&limit=1000&offset=${offset}`,
+    `opportunities?select=${columns ? "readiness_score,triage_flags," : ""}id,title,status,deadline,deadline_status,official_url,official_url_status,source_type,source_url_status,organizer,has_conflict,max_runtime_minutes,ai_policy,entry_fee_amount,application_url,eligibility,confidence,review_reason,updated_at&review_decision=eq.pending&order=id.asc&limit=1000&offset=${offset}`,
   );
   rows.push(...batch);
   if (batch.length < 1000) break;
@@ -67,11 +67,22 @@ if (apply) {
   if (columns) {
     const triagedAt = new Date().toISOString();
     for (const { row, score, flags } of scores) {
+      // Keep the automatic review's own labels, and only write rows whose
+      // score or labels changed: rewriting ~hundreds of unchanged rows made the
+      // daily job overrun its time limit.
+      const reviewFlags = (row.triage_flags ?? []).filter((flag) => flag === "watching" || flag === "needs-human");
+      const nextFlags = [...flags, ...reviewFlags];
+      const same = row.readiness_score === score
+        && JSON.stringify([...(row.triage_flags ?? [])].sort()) === JSON.stringify([...nextFlags].sort());
+      if (same) {
+        summary.unchanged = (summary.unchanged ?? 0) + 1;
+        continue;
+      }
       // Pending rows only: a record approved meanwhile is left untouched.
       await supabase(`opportunities?id=eq.${row.id}&review_decision=eq.pending`, {
         method: "PATCH",
         prefer: "return=minimal",
-        body: JSON.stringify({ readiness_score: score, triage_flags: flags, triaged_at: triagedAt }),
+        body: JSON.stringify({ readiness_score: score, triage_flags: nextFlags, triaged_at: triagedAt }),
       });
       summary.scored += 1;
     }

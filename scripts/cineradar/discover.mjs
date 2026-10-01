@@ -622,7 +622,7 @@ try {
     );
   } catch (error) {
     recordRejection(metrics, "TEMPORAL_FAILED");
-    console.error(`Temporal observations failed: ${String(error.message).slice(0, 300)}`);
+    console.error(`Temporal observations failed: ${String(error.message).slice(0, 2000)}`);
   }
   const newSources = await registerProductiveSources(deduped.records);
   const sourceYield = await creditKnownSourceYield(
