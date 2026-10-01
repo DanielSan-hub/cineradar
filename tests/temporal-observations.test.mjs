@@ -138,6 +138,7 @@ test("persistence creates observed editions, never forecasts, then replays idemp
     editionsCreated: 2,
     entityEvidenceSkipped: 0,
     entityConflictsSkipped: 0,
+    observationsRefused: 0,
     conflictsObserved: 0,
   });
   const [series] = db.tables.event_series.values();
@@ -274,4 +275,21 @@ test("only source-grounded OPEN/CLOSED claims become temporal observations", asy
     }],
   });
   assert.equal([...db.observations.values()].at(-1).p_observed_status, null);
+});
+
+test("observation rule refusals are counted, not fatal; outages still fail", async () => {
+  const db = fakeClient();
+  const item = record(2026);
+  const refusing = async (path, init) => {
+    if (String(path).startsWith("rpc/record_opportunity_observation")) {
+      throw new Error('Supabase 400: {"code":"P0001","message":"idempotency key belongs to different observation evidence"}');
+    }
+    return db.client(path, init);
+  };
+  const result = await persistTemporalObservations(
+    [item], [{ id: "op-one", canonical_key: item.canonical_key }], "run-one",
+    { client: refusing, sourceRows: [source] },
+  );
+  assert.equal(result.observationsRefused, 1);
+  assert.equal(result.observationsInserted, 0);
 });

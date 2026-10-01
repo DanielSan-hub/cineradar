@@ -598,23 +598,32 @@ try {
   // the same pages.
   await markPagesProcessed(successfulPages);
   await markDiscoveredUrlsProcessed(successfulPages);
-  const temporal = await persistTemporalObservations(
-    deduped.records,
-    result.records,
-    run.id,
-    {
-      pageEvidence: successfulPages.flatMap((item) =>
-        [item.page.inputUrl, item.page.finalUrl]
-          .filter(Boolean)
-          .map((url) => ({
-            url,
-            contentHash: item.contentHash,
-            observedAt: item.page.checkedAt,
-            pageText: item.page.text,
-          })),
-      ),
-    },
-  );
+  // Temporal history is secondary bookkeeping: records and processed pages are
+  // already stored. A failure here is recorded on the run (TEMPORAL_FAILED)
+  // and logged instead of failing the whole discovery.
+  let temporal = null;
+  try {
+    temporal = await persistTemporalObservations(
+      deduped.records,
+      result.records,
+      run.id,
+      {
+        pageEvidence: successfulPages.flatMap((item) =>
+          [item.page.inputUrl, item.page.finalUrl]
+            .filter(Boolean)
+            .map((url) => ({
+              url,
+              contentHash: item.contentHash,
+              observedAt: item.page.checkedAt,
+              pageText: item.page.text,
+            })),
+        ),
+      },
+    );
+  } catch (error) {
+    recordRejection(metrics, "TEMPORAL_FAILED");
+    console.error(`Temporal observations failed: ${String(error.message).slice(0, 300)}`);
+  }
   const newSources = await registerProductiveSources(deduped.records);
   const sourceYield = await creditKnownSourceYield(
     deduped.records,

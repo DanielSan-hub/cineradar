@@ -338,6 +338,8 @@ async function persistEntities(client, evidence, record, source, observedAt) {
  * to `{contentHash, observedAt}`; without it, structured facts form the stable
  * idempotency fingerprint. The caller must assert the temporal schema first.
  */
+const OBSERVATION_RULE_REFUSAL = /idempotency key belongs to different observation evidence|observation edition conflicts with opportunity edition/;
+
 export async function persistTemporalObservations(
   records,
   storedRecords,
@@ -362,6 +364,7 @@ export async function persistTemporalObservations(
     editionsCreated: 0,
     entityEvidenceSkipped: 0,
     entityConflictsSkipped: 0,
+    observationsRefused: 0,
     conflictsObserved: 0,
   };
 
@@ -415,30 +418,42 @@ export async function persistTemporalObservations(
       counts.entityEvidenceSkipped += 1;
     }
 
-    const result = await client("rpc/record_opportunity_observation", {
-      method: "POST",
-      body: JSON.stringify({
-        p_idempotency_key: hashParts([
-          "temporal:v1", stored.id, sourceUrl, contentHash, snapshotHash,
-        ]),
-        p_opportunity_id: stored.id,
-        p_pipeline_run_id: runId ?? null,
-        p_source_id: sourceId,
-        p_opportunity_edition_id: entities?.editionId ?? null,
-        p_source_url: sourceUrl,
-        p_content_hash: contentHash,
-        p_observed_at: observedAt,
-        // `discovered` is a pipeline state, never an observed source claim.
-        p_observed_status: status.status,
-        p_observed_deadline: deadline.deadline,
-        // PostgreSQL's claim expression must receive a non-null status:
-        // NULL = 'rolling' is NULL, which can make applied_to_current NULL.
-        p_deadline_status: deadline.status ?? "unknown",
-        p_is_primary_evidence: temporalClaimPriority(record, source) <= 40,
-        p_claim_priority: temporalClaimPriority(record, source),
-        p_observed_fields: snapshot,
-      }),
-    });
+    let result;
+    try {
+      result = await client("rpc/record_opportunity_observation", {
+        method: "POST",
+        body: JSON.stringify({
+          p_idempotency_key: hashParts([
+            "temporal:v1", stored.id, sourceUrl, contentHash, snapshotHash,
+          ]),
+          p_opportunity_id: stored.id,
+          p_pipeline_run_id: runId ?? null,
+          p_source_id: sourceId,
+          p_opportunity_edition_id: entities?.editionId ?? null,
+          p_source_url: sourceUrl,
+          p_content_hash: contentHash,
+          p_observed_at: observedAt,
+          // `discovered` is a pipeline state, never an observed source claim.
+          p_observed_status: status.status,
+          p_observed_deadline: deadline.deadline,
+          // PostgreSQL's claim expression must receive a non-null status:
+          // NULL = 'rolling' is NULL, which can make applied_to_current NULL.
+          p_deadline_status: deadline.status ?? "unknown",
+          p_is_primary_evidence: temporalClaimPriority(record, source) <= 40,
+          p_claim_priority: temporalClaimPriority(record, source),
+          p_observed_fields: snapshot,
+        }),
+      });
+    } catch (error) {
+      // The same page and evidence reached through another provenance (monitor
+      // vs gap search) reuses the key with a different source: the first
+      // observation already holds this evidence. Business-rule refusals are
+      // counted; outages and other errors still fail the run visibly.
+      if (!OBSERVATION_RULE_REFUSAL.test(String(error.message))) throw error;
+      console.warn(`Observation skipped for ${record.canonical_key}: ${String(error.message).slice(0, 160)}`);
+      counts.observationsRefused += 1;
+      continue;
+    }
     if (result?.inserted === true) counts.observationsInserted += 1;
     else if (result?.idempotent_replay === true) counts.observationsReplayed += 1;
     else throw new Error("TEMPORAL_OBSERVATION_RPC_INVALID_RESPONSE");
