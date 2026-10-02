@@ -100,6 +100,32 @@ query never returns a passed deadline. Weekly brief (roadmap P4):
 (Codex). Known next lever: 562 pending records have no deadline; only 20 quote
 a day/month without a year (7 AI) - most need the call's subpage, not year
 inference.
+Update 2026-10-02 (afternoon, owner approved points 1-4 and 6; FilmFreeway
+still no): `hunt-deadlines.mjs` runs daily in discovery before triage/review
+and reads deadlines on each pending call's own Submit/Rules/Dates pages
+(`deadline-hunt.mjs`: dated extractor, JSON-LD validThrough, year-less dates
+only when the page names that year -> `estimated`, published as `verified`
+and shown "About <date>"; on sites with several calls a date belongs to the
+call named closest to it). The first live pass attributed dates to sibling
+calls; it was rolled back and the rules fixed (tests cover the cases).
+Deterministic extraction reads JSON-LD/og:site_name/description. Cloudflare
+Browser Rendering works with the existing token (free allowance, ledgered at
+EUR 0, `BROWSER_RENDER_DAILY_LIMIT` 40) for JS-only AI/priority sites.
+Cloudflare Workers AI usage inside the 10,000 neurons/day allowance is now
+booked at EUR 0 (`cloudflareCharge`); Groq (llama-4-scout, free tier) takes
+over only after a Cloudflare refusal before inference, but the GROQ_API_KEY in
+`.env.local` is INVALID (401) and there is no Actions secret: owner must create
+a key at console.groq.com and add it as Actions secret `GROQ_API_KEY`.
+Auto-review: official-page film context or "all disciplines" makes
+residencies/labs relevant; theatre/dance, finalists/official-selection pages
+rejected; rolling calls need the current/next year on the page (copyright
+footers ignored); same official page + same deadline (or page-label name) =
+duplicate. Monitor gives 30% of each run to priority sources. Result: public
+catalogue 23 -> 43 (first CI run with the hunt: 113 inserted, 55 deterministic,
+7 more approvals). Free LLM ceiling observed: ~135 Cloudflare extractions/day. Making the GitHub repo public (owner approved, history
+scanned clean) was blocked by the local permission classifier: the owner must
+switch visibility in GitHub settings; then monitor frequency and LLM calls per
+run can be raised (the minutes test assumes the private 2,000 cap).
 
 Owner approval 2026-09-28: Exa has its own budget pool of at most 9/month
 (ledger units; USD is counted 1:1 so real spend stays <= USD 9). All other
