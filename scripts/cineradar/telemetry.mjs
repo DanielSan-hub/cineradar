@@ -14,6 +14,10 @@ const COUNTERS = [
   "inserted",
   "updated",
   "unchanged",
+  // Series-anchored extraction (rules on a known series' own site, no LLM).
+  "series_anchored",
+  "series_no_evidence",
+  "series_subpages",
 ];
 
 export function createRunMetrics(kind) {

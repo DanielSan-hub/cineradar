@@ -17,8 +17,10 @@ import {
 import { isAiFilmText, scoreCallSignal } from "./call-signal.mjs";
 import { huntDeadline } from "./deadline-hunt.mjs";
 import { mapPool } from "./http.mjs";
+import { finalFesthomeDeadline, parseFesthomeDeadlines } from "./platform-connectors.mjs";
 import { seriesKey } from "./registry-seeds.mjs";
 import { createRobotsChecker } from "./robots.mjs";
+import { platformOf } from "./series-extraction.mjs";
 import { supabase } from "./supabase.mjs";
 import { isGenericTitle } from "./normalization.mjs";
 import { fetchPageOrRender } from "./browser-render.mjs";
@@ -162,14 +164,20 @@ async function checkOfficialPage(row) {
     let quoteStillOnPage = Boolean(quote && fold(text).includes(fold(quote)));
     let datesText = "";
     // The deadline hunt reads dates on the call's own Rules/Submit page: re-read
-    // it there when it is on the same site as the official page.
+    // it there when it is on the same site as the official page. A festival's
+    // calendar on Festhome (kept by the organizer, who links its own site from
+    // it) is re-read with the platform's parser.
     const datesUrl = row.deadline_source_url;
-    if (!deadlineEvidenceFound && datesUrl && datesUrl !== page.finalUrl && sameSite(datesUrl, page.finalUrl)
-      && (await robots(datesUrl)).allowed) {
+    const platformCalendar = platformOf(datesUrl) === "Festhome";
+    if (!deadlineEvidenceFound && datesUrl && datesUrl !== page.finalUrl
+      && (sameSite(datesUrl, page.finalUrl) || platformCalendar) && (await robots(datesUrl)).allowed) {
       const datesPage = await fetchPage(datesUrl).catch(() => null);
       if (datesPage) {
         datesText = datesPage.text ?? "";
-        deadlineEvidenceFound = sameDate(huntDeadline(datesPage, { title: row.title }));
+        const calendar = platformCalendar ? finalFesthomeDeadline(parseFesthomeDeadlines(datesText)) : null;
+        deadlineEvidenceFound = platformCalendar
+          ? sameDate(calendar && { deadline: calendar.date })
+          : sameDate(huntDeadline(datesPage, { title: row.title }));
         quoteStillOnPage = quoteStillOnPage || Boolean(quote && fold(datesText).includes(fold(quote)));
       }
     }
