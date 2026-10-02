@@ -72,7 +72,7 @@ allocation stops the run), max_tokens/reservation 2,500, 70 LLM calls/run;
 pending queue ordered AI sources first, then source priority; AI sources get a
 lenient call gate (`call-signal-v2`, button wording such as "SUBMIT NOW" is a
 call phrase for all) and lenient child-link selection (path + text, not host).
-New `harvest-directories.mjs` (daily step in discovery, 240 s): reads
+New `harvest-directories.mjs` (daily step in discovery, 180 s): reads
 directory sitemaps/detail pages, registers the official page each one points
 to (JSON-LD event/organizer url or labelled outbound link) as a source; no fact
 is copied. Scheduler: GitHub starts schedules 1.5-7 h late (not failures);
