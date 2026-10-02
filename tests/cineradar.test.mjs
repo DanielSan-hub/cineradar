@@ -762,3 +762,18 @@ test("scheduled workflow ceilings stay below 2,000 private-runner minutes", asyn
   const monitorTimeout = Number(contents[1].match(/timeout-minutes: (\d+)/)[1]);
   assert.ok(budget <= (monitorTimeout - 2) * 60, "monitor must stop before its job timeout");
 });
+
+test("public catalogue hides passed deadlines and supports the quick filters", () => {
+  const now = Date.parse("2026-10-02T10:37:00Z");
+  const base = buildOpportunitiesSearchParams({ limit: 24, offset: 0, now });
+  assert.match(base.get("and"), /deadline\.is\.null,deadline_status\.eq\.rolling,deadline\.gte\.2026-10-02T10:00:00\.000Z/);
+  const quick = buildOpportunitiesSearchParams({
+    limit: 24, offset: 0, now, query: "athens", aiOnly: true, freeEntry: true, withPrize: true, closingWithinDays: 14,
+  });
+  assert.match(quick.get("and"), /or\(title\.ilike\.\*athens\*/);
+  assert.match(quick.get("and"), /category\.eq\."AI film festival",ai_policy\.in\.\(allowed,required\)/);
+  assert.equal(quick.get("or"), null);
+  assert.equal(quick.get("entry_fee_amount"), "eq.0");
+  assert.equal(quick.get("prize_amount"), "gt.0");
+  assert.equal(quick.get("deadline"), "lte.2026-10-16T10:00:00.000Z");
+});

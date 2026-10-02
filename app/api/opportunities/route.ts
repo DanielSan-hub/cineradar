@@ -63,7 +63,17 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Invalid sort mode" }, { status: 400 });
   }
 
+  const closingValue = params.get("closing");
+  const closingWithinDays = closingValue ? Number(closingValue) : null;
+  if (closingWithinDays !== null && ![7, 14, 30].includes(closingWithinDays)) {
+    return NextResponse.json({ error: "closing must be 7, 14 or 30" }, { status: 400 });
+  }
+
   const result = await getOpportunitiesPage({
+    aiOnly: params.get("ai") === "1",
+    freeEntry: params.get("free") === "1",
+    withPrize: params.get("prize") === "1",
+    closingWithinDays: closingWithinDays ?? undefined,
     limit,
     offset,
     query: normalizeOpportunityQuery(params.get("query")),

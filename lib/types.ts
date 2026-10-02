@@ -110,4 +110,16 @@ export type OpportunityPageOptions = {
   category?: OpportunityCategory | "all";
   aiPolicy?: AiPolicy | "all";
   sort?: OpportunitySortMode;
+  aiOnly?: boolean;
+  freeEntry?: boolean;
+  withPrize?: boolean;
+  closingWithinDays?: number;
+};
+
+/** Quick filters shown as chips on the public radar. */
+export type QuickFilters = {
+  aiOnly: boolean;
+  freeEntry: boolean;
+  withPrize: boolean;
+  closingWithinDays: number | null;
 };

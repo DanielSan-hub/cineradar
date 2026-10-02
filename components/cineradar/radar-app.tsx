@@ -19,6 +19,7 @@ import {
   Search,
   ShieldCheck,
   Sparkles,
+  Ticket,
   X,
 } from "lucide-react";
 
@@ -42,6 +43,7 @@ import {
 } from "@/components/ui/sheet";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { mergeUniqueById } from "@/lib/opportunity-pagination.mjs";
+import { deadlineCountdown, formatDeadline, formatMoney } from "@/lib/opportunity-format";
 import type {
   OpportunitiesPage,
   Opportunity,
@@ -49,6 +51,7 @@ import type {
   OpportunitySortMode,
   OpportunityStatus,
   PipelineHealth,
+  QuickFilters,
 } from "@/lib/types";
 
 type RadarAppProps = {
@@ -59,7 +62,10 @@ type RadarAppProps = {
   initialError: string | null;
   health: PipelineHealth;
   user: { displayName: string; email: string } | null;
+  quickCounts?: { all: number; ai: number; free: number; prize: number; closing: number };
 };
+
+const NO_QUICK_FILTERS: QuickFilters = { aiOnly: false, freeEntry: false, withPrize: false, closingWithinDays: null };
 
 type ViewMode = "all" | "verified" | "signals" | "saved";
 
@@ -90,32 +96,6 @@ const categories: OpportunityCategory[] = [
   "Advertising competition",
 ];
 
-function formatMoney(amount: number | null, currency: string | null) {
-  if (amount === null || !currency) return "Not stated";
-  if (amount === 0) return "Free entry";
-  return new Intl.NumberFormat("en", {
-    style: "currency",
-    currency,
-    maximumFractionDigits: 0,
-  }).format(amount);
-}
-
-function daysUntil(deadline: string | null) {
-  if (!deadline) return null;
-  return Math.ceil((new Date(deadline).getTime() - Date.now()) / 86_400_000);
-}
-
-function formatDeadline(deadline: string | null, status?: Opportunity["deadlineStatus"]) {
-  if (status === "rolling") return "Rolling deadline";
-  if (!deadline) return "Date not announced";
-  const formatted = new Intl.DateTimeFormat("en", {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-  }).format(new Date(deadline));
-  return status === "estimated" ? `About ${formatted}` : formatted;
-}
-
 function freshnessLabel(iso: string | null) {
   if (!iso) return "awaiting first run";
   const hours = Math.max(
@@ -135,6 +115,7 @@ async function requestOpportunityPage(
     category: string;
     aiPolicy: string;
     sort: OpportunitySortMode;
+    quick: QuickFilters;
   },
   signal?: AbortSignal,
 ): Promise<OpportunitiesPage> {
@@ -146,6 +127,10 @@ async function requestOpportunityPage(
     aiPolicy: options.aiPolicy,
     sort: options.sort,
   });
+  if (options.quick.aiOnly) params.set("ai", "1");
+  if (options.quick.freeEntry) params.set("free", "1");
+  if (options.quick.withPrize) params.set("prize", "1");
+  if (options.quick.closingWithinDays) params.set("closing", String(options.quick.closingWithinDays));
   const response = await fetch(`/api/opportunities?${params.toString()}`, {
     signal,
     headers: { Accept: "application/json" },
@@ -181,6 +166,7 @@ export function RadarApp({
   initialError,
   health,
   user,
+  quickCounts,
 }: RadarAppProps) {
   const [opportunities, setOpportunities] = useState(initialOpportunities);
   const [total, setTotal] = useState(initialTotal);
@@ -191,6 +177,7 @@ export function RadarApp({
   const [category, setCategory] = useState("all");
   const [aiPolicy, setAiPolicy] = useState("all");
   const [sort, setSort] = useState<OpportunitySortMode>("urgent");
+  const [quick, setQuick] = useState<QuickFilters>(NO_QUICK_FILTERS);
   const [view, setView] = useState<ViewMode>("all");
   const [selected, setSelected] = useState<Opportunity | null>(null);
   const [saved, setSaved] = useState<string[]>([]);
@@ -198,7 +185,7 @@ export function RadarApp({
   const [refreshing, setRefreshing] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(initialError);
-  const lastServerQuery = useRef("|all|all|urgent");
+  const lastServerQuery = useRef(`|all|all|urgent|${JSON.stringify(NO_QUICK_FILTERS)}`);
 
   useEffect(() => {
     const timeout = window.setTimeout(() => setDebouncedQuery(query), 300);
@@ -206,7 +193,7 @@ export function RadarApp({
   }, [query]);
 
   useEffect(() => {
-    const requestKey = `${debouncedQuery}|${category}|${aiPolicy}|${sort}`;
+    const requestKey = `${debouncedQuery}|${category}|${aiPolicy}|${sort}|${JSON.stringify(quick)}`;
     if (requestKey === lastServerQuery.current) return;
     lastServerQuery.current = requestKey;
     const controller = new AbortController();
@@ -223,6 +210,7 @@ export function RadarApp({
             category,
             aiPolicy,
             sort,
+            quick,
           },
           controller.signal,
         );
@@ -243,7 +231,7 @@ export function RadarApp({
 
     void reload();
     return () => controller.abort();
-  }, [aiPolicy, category, debouncedQuery, initialLimit, sort]);
+  }, [aiPolicy, category, debouncedQuery, initialLimit, quick, sort]);
 
   useEffect(() => {
     const stored = window.localStorage.getItem("cineradar:saved");
@@ -279,6 +267,7 @@ export function RadarApp({
         category,
         aiPolicy,
         sort,
+        quick,
       });
       setOpportunities((current) => mergeUniqueById(current, page.opportunities));
       setTotal(page.total);
@@ -401,11 +390,23 @@ export function RadarApp({
     setQuery("");
     setCategory("all");
     setAiPolicy("all");
+    setQuick(NO_QUICK_FILTERS);
     setView("all");
   };
+  const toggleQuick = (key: keyof QuickFilters) => setQuick((current) => ({
+    ...current,
+    [key]: key === "closingWithinDays" ? (current.closingWithinDays ? null : 14) : !current[key],
+  }));
+  const quickChips: Array<{ key: keyof QuickFilters; label: string; count?: number; active: boolean }> = [
+    { key: "aiOnly", label: "AI film", count: quickCounts?.ai, active: quick.aiOnly },
+    { key: "closingWithinDays", label: "Closing in 14 days", count: quickCounts?.closing, active: Boolean(quick.closingWithinDays) },
+    { key: "freeEntry", label: "Free entry", count: quickCounts?.free, active: quick.freeEntry },
+    { key: "withPrize", label: "Cash prize", count: quickCounts?.prize, active: quick.withPrize },
+  ];
 
   const activeFilters =
-    Number(category !== "all") + Number(aiPolicy !== "all") + Number(query !== "");
+    Number(category !== "all") + Number(aiPolicy !== "all") + Number(query !== "")
+    + Number(quick.aiOnly) + Number(quick.freeEntry) + Number(quick.withPrize) + Number(Boolean(quick.closingWithinDays));
 
   return (
     <div className="min-h-screen bg-[#071018] text-slate-100">
@@ -423,8 +424,8 @@ export function RadarApp({
 
           <nav className="ml-4 hidden items-center gap-1 text-sm text-slate-400 md:flex">
             <a className="rounded-lg bg-white/6 px-3 py-2 text-white" href="#radar">Radar</a>
-            <a className="rounded-lg px-3 py-2 transition hover:bg-white/5 hover:text-white" href="#calendar">Calendar</a>
-            <a className="rounded-lg px-3 py-2 transition hover:bg-white/5 hover:text-white" href="#signals">Signals</a>
+            <button type="button" className={`rounded-lg px-3 py-2 transition hover:bg-white/5 hover:text-white ${quick.closingWithinDays ? "text-amber-200" : ""}`} onClick={() => toggleQuick("closingWithinDays")}>Closing soon</button>
+            <button type="button" className={`rounded-lg px-3 py-2 transition hover:bg-white/5 hover:text-white ${quick.aiOnly ? "text-cyan-200" : ""}`} onClick={() => toggleQuick("aiOnly")}>AI film</button>
           </nav>
 
           <div className="ml-auto flex items-center gap-2">
@@ -507,6 +508,20 @@ export function RadarApp({
               </div>
             </div>
 
+            <div className="mb-5 flex flex-wrap gap-2" role="group" aria-label="Quick filters">
+              {quickChips.map((chip) => (
+                <button
+                  key={chip.key}
+                  type="button"
+                  aria-pressed={chip.active}
+                  onClick={() => toggleQuick(chip.key)}
+                  className={`rounded-full border px-3.5 py-1.5 text-sm transition ${chip.active ? "border-cyan-300/50 bg-cyan-300/15 text-cyan-100" : "border-white/10 bg-white/[0.03] text-slate-300 hover:border-white/20 hover:text-white"}`}
+                >
+                  {chip.label}{typeof chip.count === "number" ? <span className="ml-1.5 text-xs text-slate-500">{chip.count}</span> : null}
+                </button>
+              ))}
+            </div>
+
             {loadError && <p role="alert" className="mb-4 rounded-xl border border-rose-300/15 bg-rose-300/5 px-4 py-3 text-center text-sm text-rose-200">{loadError}</p>}
             {filtered.length ? (
               <>
@@ -570,6 +585,7 @@ export function RadarApp({
                 <Button variant="outline" className="border-white/12 bg-white/4 text-white hover:bg-white/8" onClick={() => toggleSaved(selected.id)}>
                   {saved.includes(selected.id) ? <BookmarkCheck /> : <Bookmark />}{saved.includes(selected.id) ? "Saved" : "Save"}
                 </Button>
+                {!selected.demo && <Button asChild variant="outline" className="border-white/12 bg-white/4 text-white hover:bg-white/8"><a href={`/o/${selected.slug}`}>Full page</a></Button>}
                 <OpportunityLinks opportunity={selected} />
               </SheetFooter>
             </>
@@ -591,8 +607,35 @@ function FilterControls({ category, setCategory, aiPolicy, setAiPolicy }: { cate
 }
 
 function OpportunityCard({ opportunity, saved, onSave, onOpen }: { opportunity: Opportunity; saved: boolean; onSave: () => void; onOpen: () => void }) {
-  const days = daysUntil(opportunity.deadline);
-  return <article className="group relative flex min-h-[310px] flex-col overflow-hidden rounded-2xl border border-white/8 bg-[linear-gradient(155deg,rgba(255,255,255,.045),rgba(255,255,255,.018))] p-5 transition duration-300 hover:-translate-y-0.5 hover:border-cyan-300/22 hover:shadow-[0_24px_80px_rgba(0,0,0,.22)] sm:p-6"><div className="flex items-start justify-between gap-4"><div className="flex flex-wrap gap-2"><Badge variant="outline" className={statusClass[opportunity.status]}>{statusLabel[opportunity.status]}</Badge>{opportunity.officialUrlVerified && <Badge variant="outline" className="border-white/10 bg-white/4 text-slate-300"><ShieldCheck className="mr-1 size-3" /> Official source</Badge>}</div><button type="button" onClick={onSave} className="rounded-lg p-2 text-slate-500 transition hover:bg-white/6 hover:text-cyan-200" aria-label={saved ? "Remove from saved" : "Save opportunity"}>{saved ? <BookmarkCheck className="size-5 text-cyan-300" /> : <Bookmark className="size-5" />}</button></div><button type="button" onClick={onOpen} className="mt-5 text-left"><p className="text-xs font-medium uppercase tracking-[0.13em] text-cyan-300/70">{opportunity.category}</p><h2 className="mt-2 text-xl font-semibold leading-tight tracking-[-0.025em] text-white transition group-hover:text-cyan-100">{opportunity.title}</h2><p className="mt-1 text-sm text-slate-500">{opportunity.organizer}</p><p className="mt-4 line-clamp-3 text-sm leading-6 text-slate-300">{opportunity.summary}</p></button><div className="mt-auto pt-6"><div className="grid grid-cols-2 gap-3 border-t border-white/8 pt-4 text-sm"><div><p className="flex items-center gap-1.5 text-xs text-slate-500"><Clock3 className="size-3.5" /> Deadline</p><p className="mt-1 font-medium text-slate-200">{opportunity.deadlineStatus === "rolling" ? "Rolling" : days === null ? "To be announced" : days < 0 ? "Closed" : days === 0 ? "Today" : `${days} days`}</p></div><div><p className="flex items-center gap-1.5 text-xs text-slate-500"><CircleDollarSign className="size-3.5" /> Prize</p><p className="mt-1 font-medium text-slate-200">{formatMoney(opportunity.prizeAmount, opportunity.prizeCurrency)}</p></div></div><button type="button" onClick={onOpen} className="mt-5 flex w-full items-center justify-between rounded-xl bg-white/[0.045] px-4 py-3 text-sm font-medium text-slate-200 transition hover:bg-cyan-300/10 hover:text-cyan-100">Review opportunity <ChevronRight className="size-4 transition-transform group-hover:translate-x-0.5" /></button></div></article>;
+  const countdown = deadlineCountdown(opportunity.deadline, opportunity.deadlineStatus);
+  const footerClass = "mt-5 flex w-full items-center justify-between rounded-xl bg-white/[0.045] px-4 py-3 text-sm font-medium text-slate-200 transition hover:bg-cyan-300/10 hover:text-cyan-100";
+  return (
+    <article className="group relative flex min-h-[310px] flex-col overflow-hidden rounded-2xl border border-white/8 bg-[linear-gradient(155deg,rgba(255,255,255,.045),rgba(255,255,255,.018))] p-5 transition duration-300 hover:-translate-y-0.5 hover:border-cyan-300/22 hover:shadow-[0_24px_80px_rgba(0,0,0,.22)] sm:p-6">
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex flex-wrap gap-2">
+          <Badge variant="outline" className={countdown.badgeClass}><Clock3 className="mr-1 size-3" />{countdown.label}</Badge>
+          {opportunity.officialUrlVerified && <Badge variant="outline" className="border-white/10 bg-white/4 text-slate-300"><ShieldCheck className="mr-1 size-3" /> Official source</Badge>}
+        </div>
+        <button type="button" onClick={onSave} className="rounded-lg p-2 text-slate-500 transition hover:bg-white/6 hover:text-cyan-200" aria-label={saved ? "Remove from saved" : "Save opportunity"}>{saved ? <BookmarkCheck className="size-5 text-cyan-300" /> : <Bookmark className="size-5" />}</button>
+      </div>
+      <button type="button" onClick={onOpen} className="mt-5 text-left">
+        <p className="text-xs font-medium uppercase tracking-[0.13em] text-cyan-300/70">{opportunity.category}</p>
+        <h2 className="mt-2 text-xl font-semibold leading-tight tracking-[-0.025em] text-white transition group-hover:text-cyan-100">{opportunity.title}</h2>
+        <p className="mt-1 text-sm text-slate-500">{opportunity.organizer}</p>
+        <p className="mt-4 line-clamp-3 text-sm leading-6 text-slate-300">{opportunity.summary}</p>
+      </button>
+      <div className="mt-auto pt-6">
+        <div className="grid grid-cols-3 gap-3 border-t border-white/8 pt-4 text-sm">
+          <div><p className="flex items-center gap-1.5 text-xs text-slate-500"><CalendarDays className="size-3.5" /> Deadline</p><p className="mt-1 font-medium text-slate-200">{formatDeadline(opportunity.deadline, opportunity.deadlineStatus)}</p></div>
+          <div><p className="flex items-center gap-1.5 text-xs text-slate-500"><Ticket className="size-3.5" /> Entry</p><p className="mt-1 font-medium text-slate-200">{formatMoney(opportunity.entryFeeAmount, opportunity.entryFeeCurrency)}</p></div>
+          <div><p className="flex items-center gap-1.5 text-xs text-slate-500"><CircleDollarSign className="size-3.5" /> Prize</p><p className="mt-1 font-medium text-slate-200">{formatMoney(opportunity.prizeAmount, opportunity.prizeCurrency, { free: "None stated" })}</p></div>
+        </div>
+        {opportunity.demo
+          ? <button type="button" onClick={onOpen} className={footerClass}>Review opportunity <ChevronRight className="size-4 transition-transform group-hover:translate-x-0.5" /></button>
+          : <a href={`/o/${opportunity.slug}`} className={footerClass}>View details <ChevronRight className="size-4 transition-transform group-hover:translate-x-0.5" /></a>}
+      </div>
+    </article>
+  );
 }
 
 function OpportunityLinks({ opportunity }: { opportunity: Opportunity }) {

@@ -354,6 +354,15 @@ function getDemoPage(
       ) {
         return false;
       }
+      if (options?.aiOnly && item.category !== "AI film festival" && !["allowed", "required"].includes(item.aiPolicy)) {
+        return false;
+      }
+      if (options?.freeEntry && item.entryFeeAmount !== 0) return false;
+      if (options?.withPrize && !(Number(item.prizeAmount) > 0)) return false;
+      if (options?.closingWithinDays) {
+        const deadline = item.deadline ? Date.parse(item.deadline) : NaN;
+        if (!Number.isFinite(deadline) || deadline > Date.now() + options.closingWithinDays * 86_400_000) return false;
+      }
       if (!normalizedQuery) return true;
       return [item.title, item.organizer, item.summary, item.location]
         .join(" ")
@@ -491,22 +500,89 @@ export async function getReviewQueue(
   }
 }
 
+/** Row count only: PostgREST's exact count with a one-row page. */
+async function countRows(path: string, key: string | undefined) {
+  const response = await supabaseRequest(`${path}${path.includes("?") ? "&" : "?"}limit=1`, key, {
+    headers: { Prefer: "count=exact" },
+  });
+  return responseTotal(response, 0);
+}
+
+/** How many public opportunities a filter would show (for the quick-filter chips). */
+export async function countPublicOpportunities(options: OpportunityPageOptions = {}) {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return getDemoPage({ ...options, limit: 50 }).total;
+  const query = buildOpportunitiesSearchParams({ ...options, limit: 1, offset: 0 });
+  query.set("select", "id");
+  query.delete("limit");
+  query.delete("offset");
+  return countRows(`opportunities?${query.toString()}`, SUPABASE_ANON_KEY);
+}
+
+export type QuickFilterCounts = { all: number; ai: number; free: number; prize: number; closing: number };
+
+export async function getQuickFilterCounts(): Promise<QuickFilterCounts> {
+  try {
+    const [all, ai, free, prize, closing] = await Promise.all([
+      countPublicOpportunities(),
+      countPublicOpportunities({ aiOnly: true }),
+      countPublicOpportunities({ freeEntry: true }),
+      countPublicOpportunities({ withPrize: true }),
+      countPublicOpportunities({ closingWithinDays: 14 }),
+    ]);
+    return { all, ai, free, prize, closing };
+  } catch (error) {
+    console.error("Unable to count public opportunities", error);
+    return { all: 0, ai: 0, free: 0, prize: 0, closing: 0 };
+  }
+}
+
+/** One public opportunity by slug; RLS (anon key) decides what is public. */
+export async function getPublicOpportunity(slug: string): Promise<{
+  opportunity: Opportunity;
+  deadlineQuote: string | null;
+} | null> {
+  if (!/^[a-z0-9][a-z0-9-]{0,200}$/.test(slug)) return null;
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+    const demo = demoOpportunities.find((item) => item.slug === slug);
+    return demo ? { opportunity: demo, deadlineQuote: null } : null;
+  }
+  const response = await supabaseRequest(
+    `opportunities?select=*&slug=eq.${encodeURIComponent(slug)}&status=in.(verified,open,closing-soon,closed)&limit=1`,
+    SUPABASE_ANON_KEY,
+  );
+  const [record] = (await response.json()) as JsonRecord[];
+  if (!record) return null;
+  const rawPayload = asRecord(record.raw_payload);
+  const quote = nullableString(
+    firstDefined(asRecord(rawPayload.evidence).deadline_quote, asRecord(rawPayload.extraction).deadline_evidence),
+  );
+  return { opportunity: mapOpportunityRecord(record), deadlineQuote: quote ? quote.slice(0, 280) : null };
+}
+
+/** Slugs of every currently public opportunity, for the sitemap. */
+export async function getPublicOpportunitySlugs(): Promise<Array<{ slug: string; updatedAt: string | null }>> {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return [];
+  const query = buildOpportunitiesSearchParams({ limit: 1000, offset: 0 });
+  query.set("select", "slug,updated_at");
+  const response = await supabaseRequest(`opportunities?${query.toString()}`, SUPABASE_ANON_KEY);
+  const rows = (await response.json()) as Array<{ slug: string; updated_at: string | null }>;
+  return rows.map((row) => ({ slug: row.slug, updatedAt: row.updated_at }));
+}
+
 export async function getPipelineHealth(): Promise<PipelineHealth> {
   if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return demoPipelineHealth;
   try {
     const temporal = await supportsTemporalReview();
-    const [runsResponse, sourceResponse, openResponse, leadResponse] =
+    const [runsResponse, sourcesTracked, recordsOpen, leadsPending] =
       await Promise.all([
         supabaseRequest(
           "pipeline_runs?select=kind,finished_at,status&order=finished_at.desc&limit=10",
           SUPABASE_SERVICE_ROLE_KEY,
         ),
-        supabaseRequest("sources?select=id&enabled=eq.true", SUPABASE_SERVICE_ROLE_KEY),
-        supabaseRequest(
-          "opportunities?select=id&status=in.(open,closing-soon)",
-          SUPABASE_SERVICE_ROLE_KEY,
-        ),
-        supabaseRequest(
+        countRows("sources?select=id&enabled=eq.true", SUPABASE_SERVICE_ROLE_KEY),
+        // What a visitor can actually open: the public catalogue.
+        countPublicOpportunities(),
+        countRows(
           temporal
             ? "opportunities?select=id&or=(status.in.(signal,discovered),review_required.eq.true)"
             : "opportunities?select=id&status=in.(signal,discovered)",
@@ -524,9 +600,9 @@ export async function getPipelineHealth(): Promise<PipelineHealth> {
     return {
       lastDiscoveryAt: lastDiscovery?.finished_at ?? null,
       lastMonitorAt: lastMonitor?.finished_at ?? null,
-      sourcesTracked: ((await sourceResponse.json()) as unknown[]).length,
-      recordsOpen: ((await openResponse.json()) as unknown[]).length,
-      leadsPending: ((await leadResponse.json()) as unknown[]).length,
+      sourcesTracked,
+      recordsOpen,
+      leadsPending,
       demoMode: false,
     };
   } catch (error) {
