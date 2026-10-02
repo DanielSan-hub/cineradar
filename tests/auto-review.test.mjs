@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { autoReviewDecision } from "../lib/auto-review.mjs";
+import { autoReviewDecision, categoryFromName, isExpiredPublication, publicNameChanges, publicTitleFor } from "../lib/auto-review.mjs";
 
 const NOW = Date.parse("2026-09-29T10:00:00Z");
 const DAY = 86_400_000;
@@ -34,7 +34,7 @@ test("a live call re-verified on its official page is approved", () => {
 test("organizer comes from page metadata when extraction missed it", () => {
   const result = autoReviewDecision({ ...live, organizer: "Unknown organizer" }, { now: NOW, page: { ...goodPage, organizer: "KINO Athens" } });
   assert.equal(result.decision, "approve");
-  assert.deepEqual(result.changes, { organizer: "KINO Athens" });
+  assert.deepEqual(result.changes, { organizer: "KINO Athens", title: "KINO Athens" });
   assert.equal(autoReviewDecision({ ...live, organizer: "Unknown organizer" }, { now: NOW, page: goodPage }).decision, "human");
 });
 
@@ -113,4 +113,39 @@ test("v3: the official page must belong to the call; names are cleaned", async (
   assert.equal(tampere.changes.title, "Tampere Film Festival – International Competition");
   const article = autoReviewDecision({ ...live, title: "Cairo International Short Film Festival Confirms December 2026 Dates", organizer: "Indie Shorts Mag", official_url: "https://indieshortsmag.com/2026/08/cairo" }, { now: NOW, page: goodPage });
   assert.equal(article.decision, "human");
+});
+
+test("public names drop page labels and never stay a bare category or action word", () => {
+  const cases = [
+    ["Submit", "Rochester International Film Festival", "Rochester International Film Festival"],
+    ["Makers Film Festival Submission", "Maker & Smith", "Makers Film Festival"],
+    ["KINO Athens Submissions", "KINO Athens", "KINO Athens"],
+    ["Call For Submission - Main Competition", "goEast Filmfestival", "goEast Filmfestival – Main Competition"],
+    ["Regulations – International Competition 2027", "Tampere Film Festival", "Tampere Film Festival – International Competition 2027"],
+    ["Golden Dunes — Dubai International Film Festival G O L D E N D U N E S", "Golden Dunes", "Golden Dunes — Dubai International Film Festival"],
+    ["Rules of the Game Film Fest", "Rules Collective", "Rules of the Game Film Fest"],
+    ["AI Filmfest Athens 2026", "AI Filmfest Athens", "AI Filmfest Athens 2026"],
+  ];
+  for (const [title, organizer, expected] of cases) {
+    assert.equal(publicTitleFor(title, organizer).title, expected, title);
+  }
+  assert.equal(publicTitleFor("Submit", "Unknown organizer").unresolved, true);
+});
+
+test("AI film events named as such get the AI category; funds and unrelated names do not", () => {
+  assert.equal(categoryFromName({ title: "AI Cinema Festival Canada — Ottawa", organizer: "AI Cinema Festival", category: "Traditional festival" }), "AI film festival");
+  assert.equal(categoryFromName({ title: "AI Movie Awards London", organizer: "AIMA Productions", category: "Grant" }), "AI film festival");
+  assert.equal(categoryFromName({ title: "AI Film Fund 2027", organizer: "Studio", category: "Grant" }), null);
+  assert.equal(categoryFromName({ title: "Thai Film Festival", organizer: "Thai Film Foundation", category: "Traditional festival" }), null);
+  assert.equal(categoryFromName({ title: "AI Cinema Festival", organizer: "X", category: "Residency" }), null);
+  assert.deepEqual(publicNameChanges({ title: "Submit", organizer: "Rochester International Film Festival", category: "Traditional festival" }), { title: "Rochester International Film Festival" });
+  assert.deepEqual(publicNameChanges({ title: "AI Filmfest Athens 2026", organizer: "AI Filmfest Athens", category: "AI film festival" }), {});
+});
+
+test("published calls expire a day after a recorded deadline; rolling calls never do", () => {
+  const now = Date.parse("2026-10-02T10:00:00Z");
+  assert.equal(isExpiredPublication({ deadline: "2026-10-01T23:59:59Z", deadline_status: "estimated" }, { now }), false);
+  assert.equal(isExpiredPublication({ deadline: "2026-09-30T00:00:00Z", deadline_status: "confirmed" }, { now }), true);
+  assert.equal(isExpiredPublication({ deadline: "2026-09-01T00:00:00Z", deadline_status: "rolling" }, { now }), false);
+  assert.equal(isExpiredPublication({ deadline: null, deadline_status: "unknown" }, { now }), false);
 });

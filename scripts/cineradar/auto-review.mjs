@@ -7,7 +7,7 @@
 //   node scripts/cineradar/auto-review.mjs           # dry run
 //   node scripts/cineradar/auto-review.mjs --apply   # write
 
-import { AUTO_REVIEW_VERSION, autoReviewDecision } from "../../lib/auto-review.mjs";
+import { AUTO_REVIEW_VERSION, autoReviewDecision, isExpiredPublication, publicNameChanges } from "../../lib/auto-review.mjs";
 import { scoreCallSignal } from "./call-signal.mjs";
 import { extractDeadline } from "./decision-fields.mjs";
 import { mapPool } from "./http.mjs";
@@ -251,8 +251,54 @@ if (apply) {
 const autoApproved = new Set((await all(
   "opportunity_review_events?select=opportunity_id&action=eq.approve&reviewer_email=eq.auto-review@cineradar.invalid&order=created_at.asc",
 )).map((event) => event.opportunity_id));
+// Every published record (whoever approved it): a call whose deadline passed
+// leaves the public catalogue (archived, reversible), and page labels or a
+// wrong category in its name are corrected.
+const published = rows.filter((row) => row.review_decision === "approved");
+const expired = published.filter((row) => isExpiredPublication(row));
+const expiredIds = new Set(expired.map((row) => row.id));
+// Same organizer, same deadline day and the same name once years are ignored:
+// one call published twice. Keep the more specific name (the longer title).
+const publishedGroups = new Map();
+for (const row of published) {
+  if (expiredIds.has(row.id) || !row.deadline) continue;
+  const key = [fold(row.organizer), String(row.deadline).slice(0, 10), fold(row.title).replace(/\b(?:19|20)\d\d\b/g, "").replace(/\s+/g, " ").trim()].join("|");
+  if (!publishedGroups.has(key)) publishedGroups.set(key, []);
+  publishedGroups.get(key).push(row);
+}
+for (const group of publishedGroups.values()) {
+  if (group.length < 2) continue;
+  group.sort((left, right) => right.title.length - left.title.length || String(left.id).localeCompare(String(right.id)));
+  for (const row of group.slice(1)) {
+    expired.push({ ...row, duplicateOf: group[0] });
+    expiredIds.add(row.id);
+  }
+}
+const renames = published
+  .filter((row) => !expiredIds.has(row.id) && !autoApproved.has(row.id))
+  .map((row) => ({ row, changes: publicNameChanges(row) }))
+  .filter((item) => Object.keys(item.changes).length);
+summary.published_maintenance = {
+  expired: expired.filter((row) => !row.duplicateOf).map((row) => `${row.title.slice(0, 55)} — deadline ${String(row.deadline).slice(0, 10)}`),
+  duplicates: expired.filter((row) => row.duplicateOf).map((row) => `${row.title.slice(0, 55)} = ${row.duplicateOf.title.slice(0, 55)}`),
+  rename: renames.map((item) => `${item.row.title.slice(0, 50)} → ${JSON.stringify(item.changes).slice(0, 110)}`),
+};
+if (apply) {
+  for (const row of expired) {
+    const reason = row.duplicateOf
+      ? `${AUTO_REVIEW_VERSION}: duplicate of the published "${row.duplicateOf.title}" (same organizer, deadline and name)`
+      : `${AUTO_REVIEW_VERSION}: the deadline (${String(row.deadline).slice(0, 10)}) has passed; the call is no longer open`;
+    const result = await rpc(row, "archive", reason);
+    if (!result?.ok) summary.errors += 1;
+  }
+  for (const item of renames) {
+    const result = await rpc(item.row, "edit", `${AUTO_REVIEW_VERSION} public name clean-up (page labels removed, category from the event's own name)`, { changes: item.changes });
+    if (!result?.ok) summary.errors += 1;
+  }
+}
+
 const recheck = rows
-  .filter((row) => row.review_decision === "approved" && autoApproved.has(row.id))
+  .filter((row) => row.review_decision === "approved" && autoApproved.has(row.id) && !expiredIds.has(row.id))
   .map((row) => ({
     row,
     ...autoReviewDecision(row, {
