@@ -170,3 +170,10 @@ test("v5: an organizer's own 'submissions are open' with a platform link publish
   assert.equal(autoReviewDecision({ ...undated, raw_payload: {} }, { now: NOW, page }).decision, "watch");
   assert.equal(autoReviewDecision({ ...undated, application_url: null }, { now: NOW, page }).decision, "watch");
 });
+
+test("v5: section headings take the organizer's name; craft categories are named after it", () => {
+  assert.equal(publicTitleFor("THE FESTIVAL IN NUMBERS", "DOK.fest München").title, "DOK.fest München");
+  assert.equal(publicTitleFor("About us", "Unknown organizer").unresolved, true);
+  assert.equal(publicTitleFor("Screenplay Competition", "Sedona International Film Festival").title, "Sedona International Film Festival – Screenplay Competition");
+  assert.equal(publicTitleFor("Euroscript Screenwriting Competition", "Euroscript").title, "Euroscript Screenwriting Competition");
+});

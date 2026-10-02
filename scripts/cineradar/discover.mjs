@@ -83,7 +83,14 @@ async function readSeriesSubpages(home, { allowRender = false } = {}) {
  * Series-anchored extraction for one page: rules first; the LLM is asked only
  * for AI or high-priority sources where rules found nothing.
  */
+let seriesDeadline = Infinity;
+
 async function processSeriesItem(item) {
+  // Over the time budget: the page stays queued (not processed, not deferred).
+  if (Date.now() > seriesDeadline) {
+    incrementMetric(metrics, "series_time_budget_stops");
+    return { result: { ...item, records: [], processed: false } };
+  }
   const source = item.candidate.source;
   const home = item.page;
   const name = seriesName(source, home) ?? item.candidate.title;
@@ -283,11 +290,18 @@ async function pendingKnownSourceCandidates(limit) {
   // server-side and add recently changed ones; a single oldest-first window
   // would starve new pages once the cache holds tens of thousands of rows.
   const fields = "canonical_url,source_id,content_hash,processed_hash,last_changed_at,next_retry_at";
-  const [neverProcessed, recentlyChanged] = await Promise.all([
-    supabase(`url_fetch_cache?select=${fields}&source_id=not.is.null&content_hash=not.is.null&processed_hash=is.null&order=last_changed_at.asc&limit=2000`),
-    supabase(`url_fetch_cache?select=${fields}&source_id=not.is.null&content_hash=not.is.null&processed_hash=not.is.null&order=last_changed_at.desc&limit=1000`),
-  ]);
   const now = Date.now();
+  // Deferred pages (waiting for LLM capacity) are filtered server-side, and the
+  // never-processed window is paged: PostgREST returns at most 1,000 rows, and
+  // deferred rows used to fill that window and hide the ready ones.
+  const ready = `or=(next_retry_at.is.null,next_retry_at.lte.${new Date(now).toISOString()})`;
+  const neverProcessed = [];
+  for (let offset = 0; offset < Math.max(limit, 1000) * 2; offset += 1000) {
+    const batch = await supabase(`url_fetch_cache?select=${fields}&source_id=not.is.null&content_hash=not.is.null&processed_hash=is.null&${ready}&order=last_changed_at.asc,canonical_url.asc&limit=1000&offset=${offset}`);
+    neverProcessed.push(...batch);
+    if (batch.length < 1000 || neverProcessed.length >= limit) break;
+  }
+  const recentlyChanged = await supabase(`url_fetch_cache?select=${fields}&source_id=not.is.null&content_hash=not.is.null&processed_hash=not.is.null&${ready}&order=last_changed_at.desc&limit=1000`);
   const pending = [...new Map([...recentlyChanged, ...neverProcessed].map((row) => [row.canonical_url, row])).values()]
     .filter((row) =>
       row.content_hash !== row.processed_hash
@@ -656,6 +670,7 @@ try {
   // unless rules find nothing on an AI or high-priority source.
   const isSeriesItem = (item) => isSeriesSource(item.candidate.source)
     && item.candidate.provenance.every((entry) => entry.provider === "source_monitor");
+  seriesDeadline = Date.now() + config.seriesTimeBudgetSeconds * 1000;
   const seriesResults = await mapPool(fetched.filter(isSeriesItem), config.seriesConcurrency, (item) => processSeriesItem(item));
   const llmFallback = seriesResults.filter((entry) => entry.needsLlm).map((entry) => entry.item);
   const seriesPages = seriesResults.filter((entry) => !entry.needsLlm).map((entry) => entry.result);

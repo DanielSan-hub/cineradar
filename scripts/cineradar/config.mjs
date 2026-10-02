@@ -71,6 +71,8 @@ export const config = {
   llmConcurrency: boundedNumber("LLM_CONCURRENCY", 2, { min: 1, max: 4, integer: true }),
   // Series pages are read with rules (HTTP only): more of them run at once.
   seriesConcurrency: boundedNumber("SERIES_CONCURRENCY", 8, { min: 1, max: 24, integer: true }),
+  // Series pages not reached within this budget stay queued for the next run.
+  seriesTimeBudgetSeconds: boundedNumber("SERIES_TIME_BUDGET_SECONDS", 900, { min: 60, max: 3000, integer: true }),
   pageFetchConcurrency: boundedNumber("PAGE_FETCH_CONCURRENCY", 8, { min: 1, max: 24, integer: true }),
   discoveryLlmTimeBudgetSeconds: boundedNumber("DISCOVERY_LLM_TIME_BUDGET_SECONDS", 900, { min: 60, max: 3600, integer: true }),
   urlValidationConcurrency: boundedNumber("URL_VALIDATION_CONCURRENCY", 4, { min: 1, max: 8, integer: true }),
