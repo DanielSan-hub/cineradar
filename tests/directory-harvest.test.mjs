@@ -56,6 +56,14 @@ test("official candidates come from JSON-LD first, never from FilmFreeway or soc
   });
   assert.deepEqual(filmFreewayOnly.candidates, []);
   assert.equal(filmFreewayOnly.platformOnly, true);
+
+  const pdf = officialCandidates({
+    html: "",
+    linkRecords: [{ url: "https://animac.example/media/GUIDELINES-2026.pdf", text: "Submit: guidelines" }],
+    pageUrl: "https://asianfilmfestivals.com/festival/animac",
+    directoryHost: "asianfilmfestivals.com",
+  });
+  assert.deepEqual(pdf.candidates, []);
 });
 
 test("one candidate per registrable domain, and harvested sources are monitored at once", () => {

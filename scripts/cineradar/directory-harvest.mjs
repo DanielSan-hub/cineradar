@@ -22,7 +22,9 @@ const NON_OFFICIAL_HOSTS = [
 const DETAIL_PATH = /(?:contest|festival|call|opportunit|grant|residenc|competition|award|challenge|event|fund|lab\b|fellowship|prize|submission|convocatoria|bando|concorso|ausschreibung|appel)/i;
 const LISTING_PATH = /\/(?:closing-soon|free|cash-prizes|categories?|tags?|topics?|page|location|search|guide|blog|news|vs|tools|creators|about|contact|privacy|terms)(?:\/|$)/i;
 const OFFICIAL_LINK_TEXT = /\b(?:official|website|web ?site|visit|apply|submit|enter|register|more info|learn more|go to|homepage|site officiel|sito ufficiale|sitio oficial|inscr[ií]bete|iscriviti)\b/i;
-const EVENT_TYPES = /^(?:Event|Festival|ScreeningEvent|EducationEvent|SocialEvent|BusinessEvent|ExhibitionEvent|Grant|MonetaryGrant|CreativeWork|Competition)$/;
+// The monitor reads HTML only: documents and media are not sources.
+const DOCUMENT_URL = /\.(?:pdf|docx?|xlsx?|pptx?|zip|jpe?g|png|gif|webp|mp4|mov)(?:[?#]|$)/i;
+const EVENT_TYPES =/^(?:Event|Festival|ScreeningEvent|EducationEvent|SocialEvent|BusinessEvent|ExhibitionEvent|Grant|MonetaryGrant|CreativeWork|Competition)$/;
 
 /** Registrable-domain approximation: festhome.com for filmmakers.festhome.com. */
 export function baseDomain(host) {
@@ -121,7 +123,7 @@ export function officialCandidates({ html, linkRecords = [], pageUrl, directoryH
   for (const candidate of ranked) {
     const url = canonicalizeUrl(candidate.url, pageUrl);
     const host = hostOf(url);
-    if (!url || !host) continue;
+    if (!url || !host || DOCUMENT_URL.test(url)) continue;
     if (hostMatches(host, BLOCKED_HOSTS)) {
       platformOnly += 1;
       continue;
