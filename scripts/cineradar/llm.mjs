@@ -271,6 +271,13 @@ export const GROQ_MODEL_PREFERENCE = Object.freeze([
 let groqModel = config.groqModel;
 let groqModelResolved = false;
 
+/** Request options that keep reasoning models from spending tokens on thoughts. */
+export function groqReasoningOptions(model) {
+  if (/^openai\/gpt-oss/i.test(model)) return { reasoning_effort: "low", include_reasoning: false };
+  if (/^qwen\/qwen3/i.test(model)) return { reasoning_effort: "none" };
+  return {};
+}
+
 /** First preferred, priced model the account can use (null when none). */
 export function pickGroqModel(available, { preference = GROQ_MODEL_PREFERENCE, priced = PRICED_GROQ_MODELS } = {}) {
   const usable = new Set(available);
@@ -299,15 +306,17 @@ async function resolveGroqModel() {
 
 async function groq(messages, context) {
   if (!config.groqApiKey || groqUnavailable) return null;
+  // One model per call, even if another call switches the run's model meanwhile.
+  const model = groqModel;
   const reservedUsage = estimateGroqUsage({
     inputTokens: estimateMessageTokens(messages),
     outputTokens: GROQ_MAX_OUTPUT_TOKENS,
-  }, groqModel);
+  }, model);
   const reservation = await reserveProviderUsage({
     idempotencyKey: usageIdempotencyKey([
       context.runId,
       "groq",
-      groqModel,
+      model,
       context.operation,
       context.url,
       context.contentHash,
@@ -315,7 +324,7 @@ async function groq(messages, context) {
     runId: context.runId,
     provider: "groq",
     operation: context.operation,
-    model: groqModel,
+    model: model,
     reservedCostEur: reservedUsage.cost_eur,
     usageUnits: {
       reserved_input_tokens: reservedUsage.input_tokens,
@@ -349,11 +358,14 @@ async function groq(messages, context) {
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            model: groqModel,
+            model: model,
             messages,
             response_format: { type: "json_object" },
             max_completion_tokens: GROQ_MAX_OUTPUT_TOKENS,
             temperature: 0,
+            // Reasoning models spend output tokens thinking: extraction needs
+            // little of it, and the free tier counts every token.
+            ...groqReasoningOptions(model),
           }),
         },
         config.llmTimeoutMs,
@@ -375,12 +387,24 @@ async function groq(messages, context) {
     }
     const modelGone = response.status === 404
       || /model_(?:not_found|decommissioned)|does not exist|decommissioned/i.test(String(body?.error?.code ?? body?.error?.message ?? ""));
-    if (modelGone && !groqModelResolved) {
+    if (modelGone && (model !== groqModel || !groqModelResolved)) {
       await release(response.status, "GROQ_MODEL_UNAVAILABLE");
-      if (await resolveGroqModel()) return groq(messages, context);
+      if (model !== groqModel || await resolveGroqModel()) return groq(messages, context);
+    }
+    const errorText = `${body?.error?.code ?? ""} ${body?.error?.message ?? ""}`;
+    if (response.status === 400 && !/api[_ ]key|model|permission|organization|billing/i.test(errorText)) {
+      // One page refused (invalid JSON output, too long, ...): nothing billed,
+      // Groq stays available for the next page.
+      await release(400, "GROQ_REQUEST_REJECTED");
+      console.warn(`Groq 400 for ${context.url}: ${errorText.trim().slice(0, 200)}`);
+      const error = new Error(`Groq 400 ${errorText.trim().slice(0, 120)}`);
+      error.code = "LLM_REQUEST_REJECTED";
+      error.httpStatus = 400;
+      throw error;
     }
     if ([400, 401, 403, 404].includes(response.status)) {
       // Bad key, unknown model or refused request: nothing was generated.
+      console.warn(`Groq ${response.status}: ${errorText.trim().slice(0, 200)}`);
       groqUnavailable = true;
       if (finalized) {
         const error = new Error(`Groq ${response.status} no usable model`);
@@ -400,7 +424,7 @@ async function groq(messages, context) {
       throw error;
     }
     const tokenUsage = groqTokenUsage(body);
-    const actualUsage = estimateGroqUsage(tokenUsage, groqModel);
+    const actualUsage = estimateGroqUsage(tokenUsage, model);
     const output = body.choices?.[0]?.message?.content ?? null;
     if (!output) throw new Error("Groq returned an empty extraction");
     await finalizeProviderUsage(reservation.event_id, {

@@ -213,3 +213,10 @@ test("Groq falls back to the first available free model it can price", async () 
   assert.equal(pickGroqModel(["llama-3.1-8b-instant", "openai/gpt-oss-20b", "whisper-large-v3"]), "openai/gpt-oss-20b");
   assert.equal(pickGroqModel(["whisper-large-v3", "unpriced/model"]), null);
 });
+
+test("reasoning models are asked for minimal reasoning", async () => {
+  const { groqReasoningOptions } = await import("../scripts/cineradar/llm.mjs");
+  assert.deepEqual(groqReasoningOptions("openai/gpt-oss-20b"), { reasoning_effort: "low", include_reasoning: false });
+  assert.deepEqual(groqReasoningOptions("qwen/qwen3-32b"), { reasoning_effort: "none" });
+  assert.deepEqual(groqReasoningOptions("llama-3.1-8b-instant"), {});
+});
