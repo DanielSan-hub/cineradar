@@ -553,7 +553,11 @@ try {
   await markPagesProcessed(noSignal);
   const fetched = scored
     .filter((item) => !noSignal.includes(item))
-    .sort((left, right) => Number(right.ai) - Number(left.ai) || right.callSignal.score - left.callSignal.score);
+    // AI first, then pages that print an upcoming date: pages without one
+    // mostly become records on watch (no publishable deadline).
+    .sort((left, right) => Number(right.ai) - Number(left.ai)
+      || Number(right.callSignal.futureDates > 0) - Number(left.callSignal.futureDates > 0)
+      || right.callSignal.score - left.callSignal.score);
 
   let claimedLlmCalls = 0;
   const claimLlmCall = () => {

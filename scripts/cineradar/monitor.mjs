@@ -242,9 +242,13 @@ try {
   await assertSourceRegistrySchema();
   run = await startRun("monitor");
   const dueAt = encodeURIComponent(new Date().toISOString());
-  const allSources = await supabase(
-    `sources?select=*&enabled=eq.true&or=(next_check_at.is.null,next_check_at.lte.${dueAt})&order=next_check_at.asc.nullsfirst&limit=2000`,
-  );
+  // The oldest-first window alone never reaches new high-priority sources
+  // while thousands are overdue, so priority sources are fetched separately.
+  const [overdue, priorityDue] = await Promise.all([
+    supabase(`sources?select=*&enabled=eq.true&or=(next_check_at.is.null,next_check_at.lte.${dueAt})&order=next_check_at.asc.nullsfirst&limit=2000`),
+    supabase(`sources?select=*&enabled=eq.true&priority=lt.3&or=(next_check_at.is.null,next_check_at.lte.${dueAt})&order=priority.asc,next_check_at.asc.nullsfirst&limit=1000`),
+  ]);
+  const allSources = [...new Map([...overdue, ...priorityDue].map((source) => [source.id, source])).values()];
   const sources = selectDueSources(allSources, {
     now: new Date(),
     limit: config.sourceRefreshLimit,

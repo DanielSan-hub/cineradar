@@ -413,6 +413,7 @@ export function isSourceDue(source, now = new Date()) {
 export function selectDueSources(sources, {
   now = new Date(),
   limit = sources?.length ?? 0,
+  priorityShare = 0.3,
 } = {}) {
   if (!Array.isArray(sources)) throw new TypeError("sources must be an array");
   const boundedLimit = clampInteger(limit, 0, 100_000, sources.length);
@@ -421,17 +422,28 @@ export function selectDueSources(sources, {
     ?? validDate(source.created_at)
   )?.getTime() ?? 0;
   const checkedTime = (source) => validDate(source.last_checked_at)?.getTime() ?? 0;
-  return sources
+  const priority = (source) => finiteNumber(source.priority, DEFAULT_SOURCE_POLICY.priority);
+  const ordered = sources
     .filter((source) => isSourceDue(source, now))
     .map((source, inputIndex) => ({ source, inputIndex }))
     .sort((left, right) => (
       dueTime(left.source) - dueTime(right.source)
-      || finiteNumber(left.source.priority, DEFAULT_SOURCE_POLICY.priority)
-        - finiteNumber(right.source.priority, DEFAULT_SOURCE_POLICY.priority)
+      || priority(left.source) - priority(right.source)
       || checkedTime(left.source) - checkedTime(right.source)
       || finiteNumber(right.source.yield_score) - finiteNumber(left.source.yield_score)
       || left.inputIndex - right.inputIndex
-    ))
+    ));
+  // A share of every run goes to high-priority sources (AI, newly harvested
+  // official pages) so they are not stuck behind a backlog of thousands of
+  // overdue low-priority sources; the rest stays oldest-first, so nothing
+  // starves.
+  const reserved = Math.floor(boundedLimit * Math.max(0, Math.min(1, priorityShare)));
+  const first = ordered
+    .filter(({ source }) => priority(source) < DEFAULT_SOURCE_POLICY.priority)
+    .sort((left, right) => priority(left.source) - priority(right.source) || dueTime(left.source) - dueTime(right.source))
+    .slice(0, reserved);
+  const taken = new Set(first.map(({ source }) => source));
+  return [...first, ...ordered.filter(({ source }) => !taken.has(source))]
     .slice(0, boundedLimit)
     .map(({ source }) => source);
 }

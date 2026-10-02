@@ -777,3 +777,16 @@ test("public catalogue hides passed deadlines and supports the quick filters", (
   assert.equal(quick.get("prize_amount"), "gt.0");
   assert.equal(quick.get("deadline"), "lte.2026-10-16T10:00:00.000Z");
 });
+
+test("a share of each monitor run goes to high-priority sources behind a long backlog", () => {
+  const now = new Date("2026-10-02T12:00:00Z");
+  const backlog = Array.from({ length: 20 }, (_, index) => ({
+    id: `old-${index}`, enabled: true, priority: 3, next_check_at: `2026-09-${String(10 + index).padStart(2, "0")}T00:00:00Z`,
+  }));
+  const harvested = { id: "harvested-ai", enabled: true, priority: 1, next_check_at: "2026-10-02T11:00:00Z" };
+  const picked = selectDueSources([...backlog, harvested], { now, limit: 10 }).map((item) => item.id);
+  assert.equal(picked.length, 10);
+  assert.ok(picked.includes("harvested-ai"));
+  assert.ok(picked.includes("old-0"));
+  assert.ok(!selectDueSources([...backlog, harvested], { now, limit: 10, priorityShare: 0 }).some((item) => item.id === "harvested-ai"));
+});
