@@ -27,7 +27,22 @@ const GROQ_PRICING = Object.freeze({
     inputUsdPerMillion: 0.05,
     outputUsdPerMillion: 0.08,
   }),
+  "llama-3.3-70b-versatile": Object.freeze({
+    inputUsdPerMillion: 0.59,
+    outputUsdPerMillion: 0.79,
+  }),
+  "openai/gpt-oss-120b": Object.freeze({
+    inputUsdPerMillion: 0.15,
+    outputUsdPerMillion: 0.60,
+  }),
+  "qwen/qwen3-32b": Object.freeze({
+    inputUsdPerMillion: 0.29,
+    outputUsdPerMillion: 0.59,
+  }),
 });
+
+/** Groq models the ledger can price (a model without a price is never used). */
+export const PRICED_GROQ_MODELS = Object.freeze(Object.keys(GROQ_PRICING));
 const EXA_SEARCH_RESERVATION_USD = 0.01;
 
 export class BudgetBlockedError extends Error {

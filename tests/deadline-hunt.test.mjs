@@ -207,3 +207,9 @@ test("pasted secrets are cleaned of quotes, names and whitespace", async () => {
   }
   assert.equal(cleanSecret("   "), undefined);
 });
+
+test("Groq falls back to the first available free model it can price", async () => {
+  const { pickGroqModel } = await import("../scripts/cineradar/llm.mjs");
+  assert.equal(pickGroqModel(["llama-3.1-8b-instant", "openai/gpt-oss-20b", "whisper-large-v3"]), "openai/gpt-oss-20b");
+  assert.equal(pickGroqModel(["whisper-large-v3", "unpriced/model"]), null);
+});
