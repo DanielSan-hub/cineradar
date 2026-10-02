@@ -184,6 +184,7 @@ async function checkOfficialPage(row) {
       deadlineEvidenceFound,
       quoteStillOnPage,
       organizer: siteName(page.html),
+      directoryPage: isDirectoryPage(page.finalUrl, row.title) || isDirectoryPage(url, row.title),
       // A footer "© 2026" says nothing about the call: copyright lines are ignored.
       mentionsCurrentYear: new RegExp(`\\b(?:${new Date().getUTCFullYear()}|${new Date().getUTCFullYear() + 1})\\b`)
         .test(`${text}\n${datesText}`.replace(/(?:©|&copy;|&#169;|\(c\)|copyright)[^\n]{0,80}/giu, " ")),
@@ -210,15 +211,70 @@ async function rpc(row, action, reason, { targetStatus = null, changes = {} } = 
   }).catch((error) => ({ ok: false, error: error.message }));
 }
 
+// Aggregators registered as directory sources: their pages are never a call's
+// own official page.
+const directoryHosts = new Set();
+for (let offset = 0; ; offset += 1000) {
+  const batch = await supabase(`sources?select=url&source_family=eq.opportunity-directory&order=id.asc&limit=1000&offset=${offset}`);
+  for (const source of batch) {
+    const site = siteKey(source.url);
+    if (site) directoryHosts.add(site);
+  }
+  if (batch.length < 1000) break;
+}
+function siteKey(url) {
+  try {
+    const labels = new URL(url).hostname.toLowerCase().replace(/^www./, "").split(".");
+    return labels.slice(-(labels.at(-1).length === 2 && (labels.at(-2) ?? "").length <= 3 ? 3 : 2)).join(".");
+  } catch {
+    return null;
+  }
+}
+// Organizations with several programmes (Hot Docs, Torino Film Lab) are
+// registered as channels too, but publish their own calls. A directory site is
+// an aggregator only when its name says so or our records on it come from at
+// least three different organizers.
+const AGGREGATOR_NAME = /contests|festivals|opportunit|calls|grants|residencies|news|magazine|directory|listing|database|guide/iu;
+let aggregatorHosts = null;
+function isDirectoryUrl(url) {
+  const site = url ? siteKey(url) : null;
+  return Boolean(site && aggregatorHosts?.has(site));
+}
+// Some directories also run their own calls ("Curious Refuge AI Holiday Film
+// Competition" on curiousrefuge.com): a title that names the site plus
+// something more is the site's own call; the site's name alone is the listing.
+function isDirectoryPage(url, title) {
+  if (!isDirectoryUrl(url)) return false;
+  const label = (siteKey(url) ?? "").split(".")[0].replace(/[^a-z0-9]/g, "");
+  const name = String(title ?? "").toLowerCase().normalize("NFKD").replace(/[^a-z0-9]/g, "");
+  return !(label.length >= 4 && name.includes(label) && name.length >= label.length + 8);
+}
+
 const fields = "id,title,organizer,category,summary,status,triage_flags,deadline,deadline_status,deadline_source_url,official_url,official_url_status,source_url,source_type,source_url_status,has_conflict,confidence,review_reason,review_decision,edition_year,raw_payload,updated_at";
 const rows = await all(`opportunities?select=${fields}&review_decision=in.(pending,approved)&order=id.asc`);
 const pending = rows.filter((row) => row.review_decision === "pending");
+{
+  const organizersBySite = new Map();
+  for (const row of rows) {
+    const site = siteKey(row.official_url ?? row.source_url);
+    if (!site || !directoryHosts.has(site)) continue;
+    // Spellings of the site's own name ("TorinoFilmLab", "Torino Film Lab")
+    // are the site itself, not other organizers.
+    const label = site.split(".")[0].replace(/[^a-z0-9]/g, "");
+    const organizer = fold(row.organizer).replace(/[^a-z0-9]/g, "");
+    if (!organizer || organizer === "unknownorganizer" || organizer.includes(label) || label.includes(organizer)) continue;
+    if (!organizersBySite.has(site)) organizersBySite.set(site, new Set());
+    organizersBySite.get(site).add(organizer);
+  }
+  aggregatorHosts = new Set([...directoryHosts].filter((site) =>
+    AGGREGATOR_NAME.test(site) || (organizersBySite.get(site)?.size ?? 0) >= 3));
+}
 const duplicates = findDuplicates(rows);
 const flags = await supportsFlags();
 
 const decisions = await mapPool(pending, 6, async (row) => {
   // Optimistic first pass (no network): relevance is settled on the page itself.
-  const first = autoReviewDecision(row, { duplicateOf: duplicates.get(row.id) ?? null, genericTitle: isGenericTitle(row.title), page: { ok: true, callSignal: true, deadlineEvidenceFound: true, filmContext: true } });
+  const first = autoReviewDecision(row, { duplicateOf: duplicates.get(row.id) ?? null, genericTitle: isGenericTitle(row.title), page: { ok: true, callSignal: true, deadlineEvidenceFound: true, filmContext: true, directoryPage: isDirectoryPage(row.official_url ?? row.source_url, row.title) } });
   // Only records that could be approved need the (network) page check.
   if (first.decision !== "approve" && first.decision !== "human") return { row, ...first };
   const page = await checkOfficialPage(row);
@@ -301,7 +357,10 @@ const expiredIds = new Set(expired.map((row) => row.id));
 const publishedGroups = new Map();
 for (const row of published) {
   if (expiredIds.has(row.id) || !row.deadline) continue;
-  const key = [fold(row.organizer), String(row.deadline).slice(0, 10), fold(row.title).replace(/\b(?:19|20)\d\d\b/g, "").replace(/\s+/g, " ").trim()].join("|");
+  // The set of name words, so "ScriptLab & ScriptLab Story Editing" and
+  // "ScriptLab Story Editing 2027" (or the same name twice) group together.
+  const nameWords = [...new Set(fold(row.title).replace(/\b(?:19|20)\d\d\b/g, " ").split(/[^\p{L}\p{N}]+/u).filter((word) => word.length > 1))].sort().join(" ");
+  const key = [fold(row.organizer), String(row.deadline).slice(0, 10), nameWords].join("|");
   if (!publishedGroups.has(key)) publishedGroups.set(key, []);
   publishedGroups.get(key).push(row);
 }
@@ -380,7 +439,7 @@ const recheck = rows
     ...autoReviewDecision(row, {
       duplicateOf: duplicates.get(row.id) ?? null,
       genericTitle: isGenericTitle(row.title),
-      page: { ok: true, httpStatus: 200, finalUrl: row.official_url, callSignal: true, deadlineEvidenceFound: true, closed: false, organizer: null },
+      page: { ok: true, httpStatus: 200, finalUrl: row.official_url, callSignal: true, deadlineEvidenceFound: true, closed: false, organizer: null, filmContext: true, directoryPage: isDirectoryPage(row.official_url, row.title) },
     }),
   }));
 summary.recheck = {

@@ -176,3 +176,26 @@ test("review regressions: theatre, finalists, stale rolling calls and page-label
   const named = autoReviewDecision({ ...pending, title: "Submit Your Screenplay", organizer: "NFFTY", official_url: "https://www.nffty.example/submit" }, { now: NOW, page: page({ filmContext: true, finalUrl: "https://www.nffty.example/submit" }) });
   assert.equal(named.changes.title, "NFFTY – Screenplay");
 });
+
+test("public names drop website chrome, entities and announcement sentences", async () => {
+  const { publicTitleFor, NOT_YET_OPEN } = await import("../lib/auto-review.mjs");
+  const cases = [
+    ["Home - Glasgow Short Film Festival", "Glasgow Short Film Festival", "Glasgow Short Film Festival"],
+    ["CALL FOR ENTRIES MONO NO AWARE XX 2026 &mdash; MONO NO AWARE", "MONO NO AWARE", "MONO NO AWARE XX 2026"],
+    ["Call for Entries 2027 is now open!", "Kaboom Animation Festival", "Kaboom Animation Festival"],
+    ["Inscripciones abiertas para el 41° Festival Internacional de Cine de Mar del Plata", "Mar del Plata", "41° Festival Internacional de Cine de Mar del Plata"],
+    ["WILDsound Festival – Deadline Today (Top 100 Best Reviewed Festival)", "WILDsound", "WILDsound Festival"],
+    ["Submissions for the 2027 Episodic Lab and Intensive are now open", "Sundance Institute", "Sundance Institute – 2027 Episodic Lab and Intensive"],
+  ];
+  for (const [title, organizer, expected] of cases) assert.equal(publicTitleFor(title, organizer).title, expected, title);
+  assert.ok(NOT_YET_OPEN.test("Stay tuned – Our 2027 Call for Entries is coming up in November"));
+  assert.equal(autoReviewDecision({ ...pending, title: "Stay tuned – Our 2027 Call for Entries is coming up" }, { now: NOW, page: page({ filmContext: true }) }).decision, "watch");
+  assert.equal(autoReviewDecision({ ...pending, title: "A4 Residency Art Center 2027" }, { now: NOW, page: page({ filmContext: true, directoryPage: true }) }).decision, "reject");
+});
+
+test("a title or page that says the call is closed is never published", async () => {
+  const { scoreCallSignal } = await import("../scripts/cineradar/call-signal.mjs");
+  assert.equal(autoReviewDecision({ ...pending, title: "Submissions for the 2027 Episodic Lab and Intensive are now closed." }, { now: NOW, page: page({ filmContext: true }) }).decision, "reject");
+  assert.equal(scoreCallSignal("Submissions for the 2027 Episodic Lab and Intensive are now closed.").closed, true);
+  assert.equal(autoReviewDecision({ ...pending, title: "Closed Circuit Film Festival 2027" }, { now: NOW, page: page({ filmContext: true }) }).decision, "approve");
+});

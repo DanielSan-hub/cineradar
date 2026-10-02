@@ -59,7 +59,7 @@ export function isAiSource(source) {
     || (Array.isArray(source.opportunity_categories) && source.opportunity_categories.includes("ai-film"));
 }
 
-const CLOSED_TERMS =/\b(?:submissions?|applications?|entries|call) (?:are |is )?(?:now )?closed\b|\bno longer accepting\b|\bbando scaduto\b|\bconvocatoria cerrada\b|\binscri(?:ç|c)(?:õ|o)es encerradas\b|\bappel clos\b|\bbewerbungsfrist (?:ist )?abgelaufen\b|募集は終了|마감되었습니다|已截止/iu;
+const CLOSED_TERMS =/\b(?:submissions?|applications?|entries|call) (?:are |is )?(?:now )?closed\b|\b(?:submissions?|applications?|entries|registrations?)\s+(?:for|to)\s+[^.\n]{1,80}?\s+(?:are|is)\s+(?:now\s+)?closed\b|\bno longer accepting\b|\bbando scaduto\b|\bconvocatoria cerrada\b|\binscri(?:ç|c)(?:õ|o)es encerradas\b|\bappel clos\b|\bbewerbungsfrist (?:ist )?abgelaufen\b|募集は終了|마감되었습니다|已截止/iu;
 
 const MONTHS = new Map(Object.entries({
   january: 1, jan: 1, gennaio: 1, enero: 1, janvier: 1, januar: 1, janeiro: 1, januari: 1,
