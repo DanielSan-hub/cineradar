@@ -49,9 +49,12 @@ jobs:
           CLOUDFLARE_AI_MODEL: "@cf/meta/llama-3.1-8b-instruct-fp8-fast"
           # Groq's free tier takes over only when Cloudflare refused before any
           # inference (daily allowance used); inactive without GROQ_API_KEY.
+          # Calls rotate across the account's free models (each has its own
+          # quota), starting from GROQ_MODEL; free-tier usage is booked at 0.
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           GROQ_FALLBACK_ENABLED: "true"
-          GROQ_MODEL: "meta-llama/llama-4-scout-17b-16e-instruct"
+          GROQ_FREE_TIER: "true"
+          GROQ_MODEL: "openai/gpt-oss-20b"
           BROWSER_RENDER_ENABLED: "true"
           # Zero spend (owner, 2026-10-03): no paid search. Discovery reads the
           # registry, directories and platforms only.

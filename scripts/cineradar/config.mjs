@@ -55,6 +55,10 @@ export const config = {
   groqApiKey: cleanSecret(process.env.GROQ_API_KEY),
   groqModel: process.env.GROQ_MODEL ?? "openai/gpt-oss-20b",
   groqFallbackEnabled: enabled("GROQ_FALLBACK_ENABLED"),
+  // The Groq account is on the free tier (no billing method): requests over
+  // its limits get a 429 and are never charged, so usage is booked at EUR 0.
+  // Set GROQ_FREE_TIER=false if a paid Groq plan is ever enabled.
+  groqFreeTier: enabled("GROQ_FREE_TIER", true),
   // Exa is a rotating gap/source finder, not the primary discovery engine.
   discoveryQueryLimit: boundedNumber("DISCOVERY_QUERY_LIMIT", 4, { min: 0, max: 24, integer: true }),
   discoveryResultLimit: boundedNumber("DISCOVERY_RESULT_LIMIT", 5, { min: 1, max: 10, integer: true }),

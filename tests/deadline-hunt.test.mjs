@@ -214,6 +214,40 @@ test("Groq falls back to the first available free model it can price", async () 
   assert.equal(pickGroqModel(["whisper-large-v3", "unpriced/model"]), null);
 });
 
+test("Groq rotates across free models: cooling and used-up models are skipped", async () => {
+  const { groqModelPool, nextGroqModel } = await import("../scripts/cineradar/llm.mjs");
+  const pool = groqModelPool(
+    ["llama-3.1-8b-instant", "openai/gpt-oss-20b", "whisper-large-v3", "qwen/qwen3-32b"],
+    { configured: "openai/gpt-oss-20b" },
+  );
+  // The configured model first, then the preference order; unpriced models never.
+  assert.deepEqual(pool, ["openai/gpt-oss-20b", "llama-3.1-8b-instant", "qwen/qwen3-32b"]);
+  const now = 1_000_000;
+  const state = new Map();
+  assert.deepEqual(nextGroqModel(pool, state, now), { model: "openai/gpt-oss-20b", waitMs: 0 });
+  state.set("openai/gpt-oss-20b", { cooldownUntil: now + 8_000 });
+  assert.deepEqual(nextGroqModel(pool, state, now), { model: "llama-3.1-8b-instant", waitMs: 0 });
+  state.set("llama-3.1-8b-instant", { exhausted: true });
+  state.set("qwen/qwen3-32b", { cooldownUntil: now + 3_000 });
+  // Everything cooling: wait for the model that is ready first.
+  assert.deepEqual(nextGroqModel(pool, state, now), { model: "qwen/qwen3-32b", waitMs: 3_000 });
+  state.set("openai/gpt-oss-20b", { exhausted: true });
+  state.set("qwen/qwen3-32b", { exhausted: true });
+  assert.equal(nextGroqModel(pool, state, now), null);
+});
+
+test("Groq free tier is booked at zero and prompts shrink to a model's token limit", async () => {
+  const { groqCharge, groqTextBudget, groqTokenLimit } = await import("../scripts/cineradar/llm.mjs");
+  assert.equal(groqCharge(0.004, { freeTier: true }), 0);
+  assert.equal(groqCharge(0.004, { freeTier: false }), 0.004);
+  assert.equal(groqTokenLimit({ error: { message: "Request too large for model `x` on tokens per minute (TPM): Limit 6000, Requested 7934, please reduce" } }), 6000);
+  assert.equal(groqTokenLimit({ error: { message: "other" } }), null);
+  assert.equal(groqTextBudget(null, 1500), 14_000);
+  // 6,000 x 0.9 - 2,000 output - 1,500 fixed = 1,900 tokens of page text.
+  assert.equal(groqTextBudget(6000, 1500), 7_600);
+  assert.equal(groqTextBudget(3000, 1500), 0);
+});
+
 test("reasoning models are asked for minimal reasoning", async () => {
   const { groqReasoningOptions } = await import("../scripts/cineradar/llm.mjs");
   assert.deepEqual(groqReasoningOptions("openai/gpt-oss-20b"), { reasoning_effort: "low", include_reasoning: false });

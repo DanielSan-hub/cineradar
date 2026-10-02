@@ -245,10 +245,13 @@ async function cloudflare(messages, context) {
 // Groq's free tier limits tokens per minute, so the prompt sent there is
 // shorter than Cloudflare's; a 429 is refused before inference (no charge).
 const GROQ_TEXT_CHARACTERS = 14_000;
+const GROQ_MIN_TEXT_CHARACTERS = 4_000;
 const GROQ_MAX_OUTPUT_TOKENS = 2000;
-// The free tier allows a few thousand tokens a minute: wait out a 429 when
-// the requested pause is short, and send Groq calls one at a time.
+// Calls go out one at a time. A short 429 pause (per-minute limit) moves the
+// next call to another model; a long one means that model's daily quota is
+// used for this run.
 const GROQ_MAX_WAIT_MS = 65_000;
+const GROQ_MAX_ATTEMPTS = 12;
 let groqQueue = Promise.resolve();
 
 /** Seconds to wait from a Groq 429 (retry-after header or "try again in 7.5s"). */
@@ -261,8 +264,9 @@ export function groqRetryAfterMs(headers, body) {
   return null;
 }
 
-// Groq retires models; when the configured one is gone the pipeline picks
-// the first available free-tier model it can price, in this order.
+// Free-tier models the pipeline can price, in order of preference. Each has
+// its own quota (tokens and requests per minute and per day), so rotating
+// across them multiplies the free capacity.
 export const GROQ_MODEL_PREFERENCE = Object.freeze([
   "meta-llama/llama-4-scout-17b-16e-instruct",
   "openai/gpt-oss-20b",
@@ -271,8 +275,6 @@ export const GROQ_MODEL_PREFERENCE = Object.freeze([
   "qwen/qwen3-32b",
   "llama-3.3-70b-versatile",
 ]);
-let groqModel = config.groqModel;
-let groqModelResolved = false;
 
 /** Request options that keep reasoning models from spending tokens on thoughts. */
 export function groqReasoningOptions(model) {
@@ -287,36 +289,92 @@ export function pickGroqModel(available, { preference = GROQ_MODEL_PREFERENCE, p
   return preference.find((model) => usable.has(model) && priced.includes(model)) ?? null;
 }
 
-async function resolveGroqModel() {
-  groqModelResolved = true;
+/** The configured model first, then every other available model the ledger can price. */
+export function groqModelPool(available, { configured = config.groqModel, preference = GROQ_MODEL_PREFERENCE, priced = PRICED_GROQ_MODELS } = {}) {
+  const usable = new Set(available);
+  return [...new Set([configured, ...preference])].filter((model) => usable.has(model) && priced.includes(model));
+}
+
+/**
+ * The model for the next call: the first one that is neither cooling down
+ * after a 429 nor out of quota; when all are cooling, the one ready first
+ * (with the wait). Null when every model's quota is used.
+ */
+export function nextGroqModel(pool, state, now = Date.now()) {
+  const usable = pool.filter((model) => !state.get(model)?.exhausted);
+  if (!usable.length) return null;
+  const readyAt = (model) => state.get(model)?.cooldownUntil ?? 0;
+  const ready = usable.find((model) => readyAt(model) <= now);
+  if (ready) return { model: ready, waitMs: 0 };
+  const model = usable.reduce((best, candidate) => (readyAt(candidate) < readyAt(best) ? candidate : best));
+  return { model, waitMs: readyAt(model) - now };
+}
+
+/** Groq usage booked in the ledger: nothing while the account is on the free tier. */
+export function groqCharge(amount, { freeTier = config.groqFreeTier } = {}) {
+  return freeTier ? 0 : amount;
+}
+
+/** A model's per-minute token limit, read from a "Request too large" error. */
+export function groqTokenLimit(body) {
+  const match = /\bLimit\s+(\d+)\b/i.exec(String(body?.error?.message ?? ""));
+  return match ? Number(match[1]) : null;
+}
+
+/** Page text that keeps a prompt (plus the reserved output) inside a model's per-minute token limit. */
+export function groqTextBudget(tokenLimit, fixedTokens, { maxCharacters = GROQ_TEXT_CHARACTERS, outputTokens = GROQ_MAX_OUTPUT_TOKENS } = {}) {
+  if (!tokenLimit) return maxCharacters;
+  // About four characters per token, with a tenth of the limit kept as margin.
+  const room = Math.floor(tokenLimit * 0.9) - outputTokens - fixedTokens;
+  return Math.min(maxCharacters, Math.max(0, room * 4));
+}
+
+let groqPool = null;
+const groqModelState = new Map();
+
+async function loadGroqPool() {
+  if (groqPool) return groqPool;
+  groqPool = [config.groqModel];
   try {
     const response = await fetchWithTimeout("https://api.groq.com/openai/v1/models", {
       headers: { Authorization: `Bearer ${config.groqApiKey}` },
     }, 15_000);
     const body = await response.json().catch(() => null);
     const available = (body?.data ?? []).filter((model) => model?.active !== false).map((model) => String(model.id));
-    const chosen = pickGroqModel(available);
-    console.warn(`Groq model ${groqModel} unavailable; available: ${available.join(", ").slice(0, 400)}; using ${chosen ?? "none"}`);
-    if (chosen && chosen !== groqModel) {
-      groqModel = chosen;
-      return true;
+    if (available.length) {
+      groqPool = groqModelPool(available);
+      console.warn(`Groq free-tier models in rotation: ${groqPool.join(", ") || "none"}`);
     }
   } catch (error) {
     console.warn(`Groq model list failed: ${String(error.message).slice(0, 160)}`);
   }
-  return false;
+  return groqPool;
 }
 
-function groq(messages, context) {
-  const call = groqQueue.then(() => groqCall(messages, context));
+function groq(buildMessages, context) {
+  const call = groqQueue.then(() => groqCall(buildMessages, context));
   groqQueue = call.catch(() => {});
   return call;
 }
 
-async function groqCall(messages, context) {
+async function groqCall(buildMessages, context, attempt = 1) {
   if (!config.groqApiKey || groqUnavailable) return null;
-  // One model per call, even if another call switches the run's model meanwhile.
-  const model = groqModel;
+  const next = nextGroqModel(await loadGroqPool(), groqModelState);
+  if (!next || next.waitMs > GROQ_MAX_WAIT_MS) {
+    // Every model's quota is used for now: stop using Groq in this run.
+    groqUnavailable = true;
+    return null;
+  }
+  if (next.waitMs > 0) await sleep(next.waitMs);
+  const { model } = next;
+  // A model with a small per-minute token limit gets a shorter page text.
+  const tokenLimit = groqModelState.get(model)?.tokenLimit ?? null;
+  const textCharacters = groqTextBudget(tokenLimit, estimateMessageTokens(buildMessages(0)));
+  if (textCharacters < GROQ_MIN_TEXT_CHARACTERS) {
+    groqModelState.set(model, { ...groqModelState.get(model), exhausted: true });
+    return groqCall(buildMessages, context, attempt);
+  }
+  const messages = buildMessages(textCharacters);
   const reservedUsage = estimateGroqUsage({
     inputTokens: estimateMessageTokens(messages),
     outputTokens: GROQ_MAX_OUTPUT_TOKENS,
@@ -329,18 +387,19 @@ async function groqCall(messages, context) {
       context.operation,
       context.url,
       context.contentHash,
+      ...(attempt > 1 ? [`attempt-${attempt}`] : []),
     ]),
     runId: context.runId,
     provider: "groq",
     operation: context.operation,
     model: model,
-    reservedCostEur: reservedUsage.cost_eur,
+    reservedCostEur: groqCharge(reservedUsage.cost_eur),
     usageUnits: {
       reserved_input_tokens: reservedUsage.input_tokens,
       reserved_output_tokens: reservedUsage.output_tokens,
     },
     optional: true,
-    metadata: { source_url: context.url },
+    metadata: { source_url: context.url, free_tier: config.groqFreeTier },
   });
   let finalized = false;
   const release = async (httpStatus, errorCode) => {
@@ -354,56 +413,66 @@ async function groqCall(messages, context) {
     });
     finalized = true;
   };
+  // Refused before inference (nothing billed): the page goes to the next model.
+  const retry = async (message, code, httpStatus) => {
+    if (attempt < GROQ_MAX_ATTEMPTS) return groqCall(buildMessages, context, attempt + 1);
+    const error = new Error(message);
+    error.code = code;
+    error.httpStatus = httpStatus;
+    throw error;
+  };
   try {
-    let response;
-    let body;
-    for (let attempt = 1; ; attempt += 1) {
-      response = await fetchWithTimeout(
-        "https://api.groq.com/openai/v1/chat/completions",
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${config.groqApiKey}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            model: model,
-            messages,
-            response_format: { type: "json_object" },
-            max_completion_tokens: GROQ_MAX_OUTPUT_TOKENS,
-            temperature: 0,
-            // Reasoning models spend output tokens thinking: extraction needs
-            // little of it, and the free tier counts every token.
-            ...groqReasoningOptions(model),
-          }),
+    const response = await fetchWithTimeout(
+      "https://api.groq.com/openai/v1/chat/completions",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${config.groqApiKey}`,
+          "Content-Type": "application/json",
         },
-        config.llmTimeoutMs,
-      );
-      body = await response.json().catch(() => null);
-      if (response.status !== 429) break;
-      const waitMs = groqRetryAfterMs(response.headers, body);
-      if (attempt < 6 && waitMs !== null && waitMs <= GROQ_MAX_WAIT_MS) {
-        await sleep(waitMs + 250);
-        continue;
-      }
-      // A long wait means the daily free quota is used: stop using Groq.
-      groqUnavailable = true;
-      await release(429, "GROQ_RATE_LIMITED");
-      const error = new Error("Groq 429 rate limited");
-      error.code = "LLM_THROTTLED";
-      error.httpStatus = 429;
-      throw error;
-    }
-    const modelGone = response.status === 404
-      || /model_(?:not_found|decommissioned)|does not exist|decommissioned/i.test(String(body?.error?.code ?? body?.error?.message ?? ""));
-    if (modelGone && (model !== groqModel || !groqModelResolved)) {
-      await release(response.status, "GROQ_MODEL_UNAVAILABLE");
-      if (model !== groqModel || await resolveGroqModel()) return groqCall(messages, context);
-    }
+        body: JSON.stringify({
+          model: model,
+          messages,
+          response_format: { type: "json_object" },
+          max_completion_tokens: GROQ_MAX_OUTPUT_TOKENS,
+          temperature: 0,
+          // Reasoning models spend output tokens thinking: extraction needs
+          // little of it, and the free tier counts every token.
+          ...groqReasoningOptions(model),
+        }),
+      },
+      config.llmTimeoutMs,
+    );
+    const body = await response.json().catch(() => null);
     const errorText = `${body?.error?.code ?? ""} ${body?.error?.message ?? ""}`;
-    if (response.status === 400 && !/api[_ ]key|model|permission|organization|billing/i.test(errorText)) {
-      // One page refused (invalid JSON output, too long, ...): nothing billed,
-      // Groq stays available for the next page.
+    if (response.status === 429) {
+      const waitMs = groqRetryAfterMs(response.headers, body);
+      await release(429, "GROQ_RATE_LIMITED");
+      // A short pause is the per-minute limit; a long one (or none) the daily quota.
+      groqModelState.set(model, waitMs !== null && waitMs <= GROQ_MAX_WAIT_MS
+        ? { ...groqModelState.get(model), cooldownUntil: Date.now() + waitMs + 250 }
+        : { ...groqModelState.get(model), exhausted: true });
+      return retry("Groq 429 rate limited", "LLM_THROTTLED", 429);
+    }
+    if (response.status === 413 || /request too large|tokens per minute/i.test(errorText)) {
+      // The prompt is over this model's per-minute token limit: remember the
+      // limit, so this and later pages are sent to it shortened.
+      await release(response.status, "GROQ_REQUEST_TOO_LARGE");
+      const limit = groqTokenLimit(body);
+      groqModelState.set(model, limit && limit !== tokenLimit
+        ? { ...groqModelState.get(model), tokenLimit: limit }
+        : { ...groqModelState.get(model), exhausted: true });
+      return retry("Groq request too large", "LLM_REQUEST_REJECTED", response.status);
+    }
+    if (response.status === 404 || /model_(?:not_found|decommissioned)|does not exist|decommissioned/i.test(errorText)) {
+      // Retired model: the rotation continues without it.
+      await release(response.status, "GROQ_MODEL_UNAVAILABLE");
+      groqModelState.set(model, { ...groqModelState.get(model), exhausted: true });
+      return retry("Groq model unavailable", "LLM_PROVIDER_UNAVAILABLE", response.status);
+    }
+    if (response.status === 400 && !/api[_ ]key|permission|organization|billing/i.test(errorText)) {
+      // One page refused (invalid JSON output, ...): nothing billed, Groq
+      // stays available for the next page.
       await release(400, "GROQ_REQUEST_REJECTED");
       console.warn(`Groq 400 for ${context.url}: ${errorText.trim().slice(0, 200)}`);
       const error = new Error(`Groq 400 ${errorText.trim().slice(0, 120)}`);
@@ -411,16 +480,10 @@ async function groqCall(messages, context) {
       error.httpStatus = 400;
       throw error;
     }
-    if ([400, 401, 403, 404].includes(response.status)) {
-      // Bad key, unknown model or refused request: nothing was generated.
+    if ([400, 401, 403].includes(response.status)) {
+      // Bad key or refused account: nothing was generated.
       console.warn(`Groq ${response.status}: ${errorText.trim().slice(0, 200)}`);
       groqUnavailable = true;
-      if (finalized) {
-        const error = new Error(`Groq ${response.status} no usable model`);
-        error.code = "LLM_PROVIDER_UNAVAILABLE";
-        error.httpStatus = response.status;
-        throw error;
-      }
       await release(response.status, `GROQ_HTTP_${response.status}`);
       const error = new Error(`Groq ${response.status} ${String(body?.error?.code ?? "")}`.trim());
       error.code = "LLM_PROVIDER_UNAVAILABLE";
@@ -439,8 +502,8 @@ async function groqCall(messages, context) {
     await finalizeProviderUsage(reservation.event_id, {
       status: "succeeded",
       usageUnits: actualUsage,
-      estimatedCostEur: actualUsage.cost_eur,
-      providerCost: actualUsage.cost_usd,
+      estimatedCostEur: groqCharge(actualUsage.cost_eur),
+      providerCost: groqCharge(actualUsage.cost_usd),
       providerCurrency: "USD",
       providerRequestId: body.id ?? response.headers.get("x-request-id"),
       httpStatus: response.status,
@@ -455,7 +518,7 @@ async function groqCall(messages, context) {
           reserved_input_tokens: reservedUsage.input_tokens,
           reserved_output_tokens: reservedUsage.output_tokens,
         },
-        estimatedCostEur: reservedUsage.cost_eur,
+        estimatedCostEur: groqCharge(reservedUsage.cost_eur),
         providerCurrency: "USD",
         httpStatus: error.httpStatus ?? null,
         errorCode: "GROQ_REQUEST_UNCERTAIN",
@@ -506,7 +569,7 @@ export async function extractOpportunities({
     }
   }
   if (!output && groqReady && !groqUnavailable) {
-    output = await groq(extractionMessages({ url, title, text, links, textCharacters: GROQ_TEXT_CHARACTERS, linkLimit: 60 }), context);
+    output = await groq((textCharacters) => extractionMessages({ url, title, text, links, textCharacters, linkLimit: 60 }), context);
   }
   if (!output) {
     const error = new Error(
