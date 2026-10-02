@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import {
   ArrowLeft,
   ArrowUpRight,
+  CalendarClock,
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
@@ -22,6 +23,7 @@ import {
   REVIEW_PAGE_SIZE,
 } from "@/lib/review-workflow.mjs";
 import { TRIAGE_FLAG_LABELS } from "@/lib/review-triage.mjs";
+import { getLatestBrief } from "@/lib/server/brief";
 import { getPipelineHealth, getReviewQueue } from "@/lib/server/data";
 import type { Opportunity, ReviewView } from "@/lib/types";
 
@@ -56,10 +58,12 @@ export default async function TeamPage({
   const view = parseReviewView(single(query.view)) as ReviewView;
   const page = parseReviewPage(single(query.page));
   const user = await requireTeamUser(teamHref(view, page));
-  const [reviewPage, health] = await Promise.all([
+  const [reviewPage, health, brief] = await Promise.all([
     getReviewQueue({ view, limit: REVIEW_PAGE_SIZE, offset: (page - 1) * REVIEW_PAGE_SIZE }),
     getPipelineHealth(),
+    getLatestBrief(),
   ]);
+  const briefActions = brief?.items.filter((item) => item.section === "action_now").slice(0, 3) ?? [];
   const queue = reviewPage.opportunities;
   const pageCount = Math.max(1, Math.ceil(reviewPage.total / REVIEW_PAGE_SIZE));
 
@@ -185,6 +189,25 @@ export default async function TeamPage({
           </div>
 
           <aside className="space-y-4">
+            <div className="rounded-2xl border border-cyan-300/20 bg-cyan-300/[0.05] p-5">
+              <h2 className="flex items-center gap-2 text-base font-medium text-white"><CalendarClock className="size-4 text-cyan-300" /> This week</h2>
+              {brief ? (
+                <>
+                  <ul className="mt-4 space-y-3 text-sm">
+                    {briefActions.map((item) => (
+                      <li key={item.position}>
+                        <p className="font-medium text-slate-100">{item.title}</p>
+                        <p className="mt-0.5 text-slate-400">{item.reason}</p>
+                      </li>
+                    ))}
+                    {!briefActions.length && <li className="text-slate-400">No deadline needs action in the next 30 days.</li>}
+                  </ul>
+                  <a href="/team/brief" className="mt-4 inline-flex items-center gap-1 text-sm text-cyan-200 hover:text-cyan-100">Full weekly brief <ChevronRight className="size-4" /></a>
+                </>
+              ) : (
+                <p className="mt-3 text-sm text-slate-400">The weekly brief appears here after its first Sunday run.</p>
+              )}
+            </div>
             <div className="rounded-2xl border border-white/8 bg-white/[0.025] p-5">
               <h2 className="flex items-center gap-2 text-base font-medium text-white"><ShieldAlert className="size-4 text-amber-300" /> Publish gate</h2>
               <ol className="mt-4 space-y-4 text-sm text-slate-400">

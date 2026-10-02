@@ -1,4 +1,4 @@
-name: CineRadar URL revalidation
+name: CineRadar weekly revalidation and brief
 
 on:
   workflow_dispatch:
@@ -29,3 +29,9 @@ jobs:
           HTTP_TIMEOUT_MS: "12000"
           URL_VALIDATION_CONCURRENCY: "4"
           REVALIDATION_LIMIT: "200"
+      - name: Build the weekly team brief (stored records only, no LLM)
+        if: always()
+        run: node scripts/cineradar/weekly-brief.mjs --apply
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
