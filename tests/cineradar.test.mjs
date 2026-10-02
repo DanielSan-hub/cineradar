@@ -742,11 +742,20 @@ test("scheduled workflow ceilings stay below 2,000 private-runner minutes", asyn
     if (dayOfWeek !== "*") return perDay * 5 * dayOfWeek.split(",").length;
     return perDay * 31;
   };
+  // A guarded slot is run once in full (dispatched or scheduled) and the
+  // other trigger stops after its guard step: one extra billed minute.
   const worstCaseMinutes = contents.reduce((total, content) => {
     const crons = [...content.matchAll(/cron: "([^"]+)"/g)].map((match) => match[1]);
     const timeout = Number(content.match(/timeout-minutes: (\d+)/)[1]);
-    return total + crons.reduce((sum, cron) => sum + runsPerMonth(cron) * timeout, 0);
+    const guardMinutes = /id: guard/.test(content) ? 1 : 0;
+    return total + crons.reduce((sum, cron) => sum + runsPerMonth(cron) * (timeout + guardMinutes), 0);
   }, 0);
+  for (const content of [contents[0], contents[1]]) {
+    assert.match(content, /id: guard/);
+    // Every work step must honour the guard.
+    const steps = content.split("\n      - ").slice(1).filter((step) => !step.startsWith("name: Skip when"));
+    assert.ok(steps.every((step) => /steps\.guard\.outputs\.skip != 'true'/.test(step)));
+  }
   assert.ok(worstCaseMinutes < 2000, `worst case ${worstCaseMinutes} minutes`);
   assert.match(contents[1], /MONITOR_TIME_BUDGET_SECONDS: "(\d+)"/);
   const budget = Number(contents[1].match(/MONITOR_TIME_BUDGET_SECONDS: "(\d+)"/)[1]);

@@ -13,16 +13,33 @@ concurrency:
 jobs:
   monitor:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 11
     permissions:
       contents: read
+      actions: read
     steps:
+      # GitHub starts scheduled runs hours late. The Supabase dispatcher
+      # (pg_cron -> workflow_dispatch) is the on-time trigger; this schedule
+      # is only a fallback and stops at once when a dispatched run covered
+      # the slot.
+      - name: Skip when the external scheduler already ran this slot
+        id: guard
+        if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          since=$(date -u -d '10 hours ago' +%Y-%m-%dT%H:%M:%SZ)
+          covered=$(gh api "repos/${{ github.repository }}/actions/workflows/monitor.yml/runs?event=workflow_dispatch&created=>=$since&per_page=5" --jq '[.workflow_runs[] | select(.conclusion != "failure" and .conclusion != "cancelled")] | length')
+          if [ "$covered" -gt 0 ]; then echo "skip=true" >> "$GITHUB_OUTPUT"; echo "A dispatched run already covered this slot."; fi
       - uses: actions/checkout@v5
+        if: steps.guard.outputs.skip != 'true'
       - uses: actions/setup-node@v5
+        if: steps.guard.outputs.skip != 'true'
         with:
           node-version: 22
           package-manager-cache: false
       - name: Refresh known sources with HTTP and hashes only
+        if: steps.guard.outputs.skip != 'true'
         run: node scripts/cineradar/monitor.mjs
         env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}

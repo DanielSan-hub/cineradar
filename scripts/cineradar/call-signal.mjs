@@ -2,7 +2,7 @@
 // on text the monitor has already fetched, so pages without a call never reach
 // paid extraction. Pure: no network, filesystem or database access.
 
-export const CALL_SIGNAL_VERSION = "call-signal-v1";
+export const CALL_SIGNAL_VERSION = "call-signal-v2";
 
 // Phrases that announce a call, submission window or application process.
 const CALL_TERMS = [
@@ -24,6 +24,8 @@ const CALL_TERMS = [
   ["ru", /при[её]м заявок|дедлайн|крайний срок/iu],
   ["el", /προθεσμία|υποβολή (?:ταινιών|αιτήσεων)|πρόσκληση/iu],
   ["en", /\bsubmissions?\b|\bentry form\b|\benter your (?:film|work)/i],
+  // Contest and challenge sites announce calls with buttons, not prose.
+  ["en", /\bsubmit (?:now|here|today|your entry)\b|\benter (?:now|here|the (?:contest|competition|challenge))\b|\bregister (?:now|your film)\b|\bjoin the (?:contest|challenge|competition)\b|\bprize pool\b|\bcash prizes?\b/i],
   ["es", /\bpostulaci(?:ón|on|ones)\b|\bplazo de (?:inscripci|presentaci)/i],
   ["pt", /\bcandidaturas?\b|\bsubmiss(?:ã|a)o de (?:filmes|obras)/i],
   ["ca", /\bconvocat(?:ò|o)ria\b|\binscripcions\b|\bdata l(?:í|i)mit\b/i],
@@ -42,7 +44,22 @@ const CALL_TERMS = [
   ["ar", /آخر موعد|باب التقديم|التقديم مفتوح|دعوة مفتوحة/u],
 ];
 
-const CLOSED_TERMS = /\b(?:submissions?|applications?|entries|call) (?:are |is )?(?:now )?closed\b|\bno longer accepting\b|\bbando scaduto\b|\bconvocatoria cerrada\b|\binscri(?:ç|c)(?:õ|o)es encerradas\b|\bappel clos\b|\bbewerbungsfrist (?:ist )?abgelaufen\b|募集は終了|마감되었습니다|已截止/iu;
+// AI filmmaking context: specific phrases only, so a festival that merely
+// mentions "AI" once is not treated as an AI contest site.
+const AI_FILM_TEXT = /\bAI[- ](?:film|movie|video|short|cinema|generated|filmmak|animation|music video|creators?|storytell|ad\b|advert)|\bgenerative (?:AI|video|film|cinema)|\bAI[- ]assisted\b|\bmade with AI\b|\bartificial intelligence (?:film|cinema|video)|\b(?:cine|cortos?|cortometrajes?|película|festival)\b[^.\n]{0,40}\b(?:IA|inteligencia artificial)\b|\bintelligenza artificiale\b|\bintelligence artificielle\b|\bKI[- ](?:Film|Kurzfilm)|AI映画|AI영화|AI 영화|AI电影|AI短片/iu;
+
+export function isAiFilmText(text) {
+  return AI_FILM_TEXT.test(typeof text === "string" ? text.slice(0, 200_000) : "");
+}
+
+/** Registry sources dedicated to AI film / creative tech. */
+export function isAiSource(source) {
+  if (!source) return false;
+  return source.source_family === "ai-creative-tech"
+    || (Array.isArray(source.opportunity_categories) && source.opportunity_categories.includes("ai-film"));
+}
+
+const CLOSED_TERMS =/\b(?:submissions?|applications?|entries|call) (?:are |is )?(?:now )?closed\b|\bno longer accepting\b|\bbando scaduto\b|\bconvocatoria cerrada\b|\binscri(?:ç|c)(?:õ|o)es encerradas\b|\bappel clos\b|\bbewerbungsfrist (?:ist )?abgelaufen\b|募集は終了|마감되었습니다|已截止/iu;
 
 const MONTHS = new Map(Object.entries({
   january: 1, jan: 1, gennaio: 1, enero: 1, janvier: 1, januar: 1, janeiro: 1, januari: 1,
@@ -123,7 +140,7 @@ function mentionsUpcomingYear(text, now) {
  * @param {string} text plain page text
  * @param {{ now?: number }} [options]
  */
-export function scoreCallSignal(text, { now = Date.now() } = {}) {
+export function scoreCallSignal(text, { now = Date.now(), lenient = false } = {}) {
   const body = typeof text === "string" ? text.slice(0, 200_000) : "";
   const terms = [...new Set(CALL_TERMS.filter(([, pattern]) => pattern.test(body)).map(([lang, pattern]) => `${lang}:${pattern.source.slice(0, 24)}`))];
   const dates = futureDateMentions(body, { now });
@@ -133,10 +150,13 @@ export function scoreCallSignal(text, { now = Date.now() } = {}) {
     + (dates.length ? 3 : 0)
     + (upcomingYear ? 1 : 0)
     - (closed ? 1 : 0);
+  const strict = (terms.length >= 1 && (dates.length > 0 || upcomingYear)) || terms.length >= 3;
   return {
     version: CALL_SIGNAL_VERSION,
     // Several distinct call phrases are enough even when no date is printed.
-    pass: (terms.length >= 1 && (dates.length > 0 || upcomingYear)) || terms.length >= 3,
+    // AI-film sources are few and mostly contests: one call phrase, an
+    // in-window date or an upcoming-year mention is enough there.
+    pass: strict || (lenient && (terms.length >= 1 || dates.length > 0 || upcomingYear)),
     score,
     termCount: terms.length,
     futureDates: dates.length,

@@ -61,6 +61,27 @@ Update 2026-10-01: scheduled discovery verified green after three fixes
 series last_seen_at keeps Postgres microseconds; triage/auto-review write only
 changed rows). Discovery job ~3 min (timeout 15), monitor twice daily x 1,000
 sources (timeout 12); worst-case Actions minutes 1,794/month.
+Update 2026-10-02 (coverage throughput, after comparing with aifilmcontests.com):
+AFC listed 90 open AI contests; we held 34 (5 published). 36 of the 90 exist
+only on FilmFreeway (never fetched). The other misses were ours: pages already
+fetched but stuck (535 LLM_RUN_LIMIT, 198 BUDGET_BLOCKED). Cause: Cloudflare
+429s (capacity) were booked `uncertain` at the full 4,000-token reservation, so
+the 9,000-neuron daily limit blocked the day after ~60 calls (real use ~65
+neurons/call). Fixes: 429 retried and booked `released` (3036 = daily
+allocation stops the run), max_tokens/reservation 2,500, 70 LLM calls/run;
+pending queue ordered AI sources first, then source priority; AI sources get a
+lenient call gate (`call-signal-v2`, button wording such as "SUBMIT NOW" is a
+call phrase for all) and lenient child-link selection (path + text, not host).
+New `harvest-directories.mjs` (daily step in discovery, 240 s): reads
+directory sitemaps/detail pages, registers the official page each one points
+to (JSON-LD event/organizer url or labelled outbound link) as a source; no fact
+is copied. Scheduler: GitHub starts schedules 1.5-7 h late (not failures);
+`202610020001_pipeline_dispatcher.sql` adds pg_cron + pg_net dispatch of
+monitor/discovery at the exact times, GitHub schedules become a guarded
+fallback (skip if a dispatched run exists in the last 10 h). Owner action:
+create a fine-grained PAT (this repo only, Actions read/write), store it with
+`vault.create_secret(..., 'cineradar_github_dispatch_token')`, apply the
+migration. Worst-case minutes with guards: 1,856/month.
 
 Owner approval 2026-09-28: Exa has its own budget pool of at most 9/month
 (ledger units; USD is counted 1:1 so real spend stays <= USD 9). All other

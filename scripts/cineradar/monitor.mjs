@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-import { CALL_SIGNAL_VERSION, scoreCallSignal } from "./call-signal.mjs";
+import { CALL_SIGNAL_VERSION, isAiFilmText, isAiSource, scoreCallSignal } from "./call-signal.mjs";
 import { config } from "./config.mjs";
 import { mapPool } from "./http.mjs";
 import { BLOCKED_HOSTS } from "./registry-seeds.mjs";
@@ -55,9 +55,10 @@ function isBlockedHost(url) {
 
 // Pages with no actionable call are settled here, for free, so discovery only
 // spends extraction effort on pages that announce a submission window.
-async function gateCallSignal(page, observation) {
+async function gateCallSignal(page, observation, source) {
   if (page.notModified || observation.alreadyProcessed) return;
-  const signal = scoreCallSignal(page.text ?? "");
+  const lenient = isAiSource(source) || isAiFilmText(page.text ?? "");
+  const signal = scoreCallSignal(page.text ?? "", { lenient });
   if (signal.pass) {
     gate.passed += 1;
     return;
@@ -160,7 +161,7 @@ async function fetchObserved(url, source, existing, { forceBody = false } = {}) 
     : await observeFetchedPage(page, { sourceId: source.id, existing });
   if (observation.changed) incrementMetric(metrics, "discovered");
   else incrementMetric(metrics, "unchanged");
-  await gateCallSignal(page, observation);
+  await gateCallSignal(page, observation, source);
   return { page, observation };
 }
 

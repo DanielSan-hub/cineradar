@@ -12,7 +12,7 @@ import {
   reserveProviderUsage,
   usageIdempotencyKey,
 } from "./cost-control.mjs";
-import { scoreCallSignal } from "./call-signal.mjs";
+import { isAiFilmText, isAiSource, scoreCallSignal } from "./call-signal.mjs";
 import { admitDiscoveryCandidates } from "./discovery-candidates.mjs";
 import { fetchWithTimeout, mapPool } from "./http.mjs";
 import { dedupeOpportunitiesDetailed } from "./normalization.mjs";
@@ -216,18 +216,28 @@ async function pendingKnownSourceCandidates(limit) {
     .filter((row) =>
       row.content_hash !== row.processed_hash
       && (!row.next_retry_at || Date.parse(row.next_retry_at) <= now),
-    )
-    .sort((left, right) => Date.parse(left.last_changed_at ?? 0) - Date.parse(right.last_changed_at ?? 0));
+    );
   const sourceIds = [...new Set(pending.map((row) => row.source_id).filter(Boolean))];
   if (!sourceIds.length) return [];
-  const sources = await selectIn("sources", "id,name,source_type", "id", sourceIds);
+  const sources = await selectIn("sources", "id,name,source_type,source_family,priority,opportunity_categories", "id", sourceIds);
   const sourceById = new Map(sources.map((source) => [source.id, source]));
+  // AI-focused sources first, then source priority (1 = highest), then oldest:
+  // an oldest-first queue left new AI contest pages waiting behind thousands of
+  // generic festival homepages.
+  pending.sort((left, right) => {
+    const a = sourceById.get(left.source_id);
+    const b = sourceById.get(right.source_id);
+    return Number(isAiSource(b)) - Number(isAiSource(a))
+      || Number(a?.priority ?? 3) - Number(b?.priority ?? 3)
+      || Date.parse(left.last_changed_at ?? 0) - Date.parse(right.last_changed_at ?? 0);
+  });
   return pending.slice(0, limit).map((row) => {
     const source = sourceById.get(row.source_id);
     return {
       url: row.canonical_url,
       title: source?.name ?? "Known source",
       sourceType: source?.source_type ?? "official",
+      aiSource: isAiSource(source),
       provenance: [{
         provider: "source_monitor",
         queryId: null,
@@ -531,7 +541,10 @@ try {
   // then goes to the strongest call signals first.
   const scored = observations
     .filter((item) => !item.unchanged)
-    .map((item) => ({ ...item, callSignal: scoreCallSignal(item.page.text ?? "") }));
+    .map((item) => {
+      const ai = Boolean(item.candidate.aiSource) || isAiFilmText(item.page.text ?? "");
+      return { ...item, ai, callSignal: scoreCallSignal(item.page.text ?? "", { lenient: ai }) };
+    });
   const noSignal = scored.filter((item) =>
     !item.callSignal.pass
     && item.candidate.provenance.every((entry) => entry.provider === "source_monitor"),
@@ -540,7 +553,7 @@ try {
   await markPagesProcessed(noSignal);
   const fetched = scored
     .filter((item) => !noSignal.includes(item))
-    .sort((left, right) => right.callSignal.score - left.callSignal.score);
+    .sort((left, right) => Number(right.ai) - Number(left.ai) || right.callSignal.score - left.callSignal.score);
 
   let claimedLlmCalls = 0;
   const claimLlmCall = () => {

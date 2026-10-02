@@ -79,11 +79,34 @@ export function parseExtractionPayload(value) {
     .slice(0, 5);
 }
 
+// Real extractions average ~700 output tokens (largest seen ~2,300); the
+// reservation must match max_tokens so it stays an upper bound.
+const MAX_OUTPUT_TOKENS = 2500;
+const THROTTLE_RETRIES = 3;
+const THROTTLE_BACKOFF_MS = 4000;
+let cloudflareExhausted = false;
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Cloudflare error 3036 / "daily free allocation" means: stop for today. */
+export function cloudflareThrottle(body) {
+  const errors = Array.isArray(body?.errors) ? body.errors : [];
+  const text = errors.map((item) => `${item?.code ?? ""} ${item?.message ?? ""}`).join(" ");
+  return {
+    exhausted: /\b3036\b|daily free allocation|neurons? (?:limit|allocation)/i.test(text),
+    text: text.slice(0, 200),
+  };
+}
+
 async function cloudflare(messages, context) {
   if (!config.cloudflareAccountId || !config.cloudflareApiToken) return null;
+  if (cloudflareExhausted) {
+    const error = new Error("Cloudflare AI daily allocation is used up for this run");
+    error.code = "LLM_PROVIDER_EXHAUSTED";
+    throw error;
+  }
   const reservedUsage = estimateCloudflareUsage({
     inputTokens: estimateMessageTokens(messages),
-    outputTokens: 4000,
+    outputTokens: MAX_OUTPUT_TOKENS,
   });
   const reservation = await reserveProviderUsage({
     idempotencyKey: usageIdempotencyKey([
@@ -108,24 +131,50 @@ async function cloudflare(messages, context) {
   });
   let finalized = false;
   try {
-    const response = await fetchWithTimeout(
-      `https://api.cloudflare.com/client/v4/accounts/${config.cloudflareAccountId}/ai/run/${config.cloudflareModel}`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${config.cloudflareApiToken}`,
-          "Content-Type": "application/json",
+    let response;
+    let body;
+    for (let attempt = 1; ; attempt += 1) {
+      response = await fetchWithTimeout(
+        `https://api.cloudflare.com/client/v4/accounts/${config.cloudflareAccountId}/ai/run/${config.cloudflareModel}`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${config.cloudflareApiToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            messages,
+            response_format: { type: "json_object" },
+            max_tokens: MAX_OUTPUT_TOKENS,
+            temperature: 0,
+          }),
         },
-        body: JSON.stringify({
-          messages,
-          response_format: { type: "json_object" },
-          max_tokens: 4000,
-          temperature: 0,
-        }),
-      },
-      config.llmTimeoutMs,
-    );
-    const body = await response.json().catch(() => null);
+        config.llmTimeoutMs,
+      );
+      body = await response.json().catch(() => null);
+      if (response.status !== 429) break;
+      // A 429 is refused before inference, so nothing was consumed: release the
+      // reservation instead of counting it against the daily neuron limit.
+      const throttle = cloudflareThrottle(body);
+      if (!throttle.exhausted && attempt < THROTTLE_RETRIES) {
+        await sleep(THROTTLE_BACKOFF_MS * attempt);
+        continue;
+      }
+      if (throttle.exhausted) cloudflareExhausted = true;
+      await finalizeProviderUsage(reservation.event_id, {
+        status: "released",
+        usageUnits: { reserved_neurons: reservedUsage.neurons, released_neurons: reservedUsage.neurons },
+        estimatedCostEur: 0,
+        providerCurrency: "USD",
+        httpStatus: 429,
+        errorCode: throttle.exhausted ? "CLOUDFLARE_DAILY_ALLOCATION" : "CLOUDFLARE_THROTTLED",
+      });
+      finalized = true;
+      const error = new Error(`Cloudflare AI 429 ${throttle.exhausted ? "daily allocation used" : "throttled"}`);
+      error.code = throttle.exhausted ? "LLM_PROVIDER_EXHAUSTED" : "LLM_THROTTLED";
+      error.httpStatus = 429;
+      throw error;
+    }
     if (!response.ok || body?.success !== true || !body?.result) {
       const error = new Error(`Cloudflare AI ${response.status} invalid response`);
       error.httpStatus = response.status;

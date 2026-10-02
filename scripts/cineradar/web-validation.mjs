@@ -1,3 +1,4 @@
+import { isAiSource } from "./call-signal.mjs";
 import { config } from "./config.mjs";
 
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
@@ -57,7 +58,9 @@ const LINK_POSITIVE = [
   /pendaftaran|enter|call[- ]for|entry/i,
   /รับสมัคร|ส่งผลงาน|הגשת|קול קורא|आवेदन|đăng ký|приём заявок|конкурс/iu,
 ];
+const LINK_LENIENT = /\b(?:festival|contests?|competition|challenge|categor(?:y|ies)|prizes?|awards?|rules|guidelines|faq|enter|register|sign[- ]?up|join|season|20[23]\d)\b/i;
 const LINK_STRONG = [
+  /\bcontests?\b/i,
   /\bapply\b/i,
   /\bapplication/i,
   /\bsubmit/i,
@@ -437,6 +440,16 @@ export async function validateUrl(
   };
 }
 
+// The host is left out: a domain such as metamorph-award.com would make
+// every link on the site look like an award page.
+function linkPathAndText(record) {
+  try {
+    return `${new URL(record.url).pathname} ${record.text ?? ""}`;
+  } catch {
+    return String(record.text ?? "");
+  }
+}
+
 export function selectOpportunityLinks(
   linkRecords,
   {
@@ -444,6 +457,7 @@ export function selectOpportunityLinks(
     limit = 8,
     year = new Date().getUTCFullYear(),
     offset = 0,
+    lenient = false,
   } = {},
 ) {
   const sourceHost = canonicalizeUrl(sourceUrl) ? new URL(canonicalizeUrl(sourceUrl)).hostname : null;
@@ -457,7 +471,9 @@ export function selectOpportunityLinks(
       const strong = LINK_STRONG.some((pattern) => pattern.test(haystack));
       return { ...record, score, strong };
     })
-    .filter((record) => record.score > 0 && record.strong)
+    // AI contest sites label calls loosely ("See the festival", "Categories
+    // 2027", "Prizes"): any positive, non-negative link qualifies there.
+    .filter((record) => record.score > 0 && (record.strong || (lenient && LINK_LENIENT.test(linkPathAndText(record)))))
     .sort((a, b) => b.score - a.score || a.url.localeCompare(b.url));
   if (!ranked.length || limit <= 0) return [];
   const start = Math.max(0, Math.trunc(offset));
@@ -485,5 +501,5 @@ export function selectSourceOpportunityLinks(source, linkRecords, options = {}) 
     const limit = Math.max(0, Math.trunc(options.limit ?? 8));
     return details.slice(offset, offset + limit);
   }
-  return selectOpportunityLinks(linkRecords ?? [], { ...options, sourceUrl });
+  return selectOpportunityLinks(linkRecords ?? [], { lenient: isAiSource(source), ...options, sourceUrl });
 }

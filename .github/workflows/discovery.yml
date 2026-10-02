@@ -15,13 +15,30 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
+      actions: read
     steps:
+      # GitHub starts scheduled runs hours late. The Supabase dispatcher
+      # (pg_cron -> workflow_dispatch) is the on-time trigger; this schedule
+      # is only a fallback and stops at once when a dispatched run covered
+      # the slot.
+      - name: Skip when the external scheduler already ran this slot
+        id: guard
+        if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          since=$(date -u -d '10 hours ago' +%Y-%m-%dT%H:%M:%SZ)
+          covered=$(gh api "repos/${{ github.repository }}/actions/workflows/discovery.yml/runs?event=workflow_dispatch&created=>=$since&per_page=5" --jq '[.workflow_runs[] | select(.conclusion != "failure" and .conclusion != "cancelled")] | length')
+          if [ "$covered" -gt 0 ]; then echo "skip=true" >> "$GITHUB_OUTPUT"; echo "A dispatched run already covered this slot."; fi
       - uses: actions/checkout@v5
+        if: steps.guard.outputs.skip != 'true'
       - uses: actions/setup-node@v5
+        if: steps.guard.outputs.skip != 'true'
         with:
           node-version: 22
           package-manager-cache: false
       - name: Discover and ingest opportunities
+        if: steps.guard.outputs.skip != 'true'
         run: node scripts/cineradar/discover.mjs
         env:
           EXA_API_KEY: ${{ secrets.EXA_API_KEY }}
@@ -33,7 +50,7 @@ jobs:
           GROQ_FALLBACK_ENABLED: "false"
           DISCOVERY_QUERY_LIMIT: "6"
           DISCOVERY_RESULT_LIMIT: "5"
-          MAX_LLM_CALLS_PER_RUN: "60"
+          MAX_LLM_CALLS_PER_RUN: "70"
           FREE_PROCESSING_LIMIT: "220"
           HTTP_TIMEOUT_MS: "12000"
           LLM_TIMEOUT_MS: "45000"
@@ -45,15 +62,26 @@ jobs:
           USD_TO_EUR_RATE: "1"
           CLOUDFLARE_DAILY_NEURON_LIMIT: "9000"
       - name: Triage the review queue (archive expired, score readiness)
-        if: always()
+        if: always() && steps.guard.outputs.skip != 'true'
         run: node scripts/cineradar/triage.mjs --apply
         env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       - name: Automatic review (approve proven calls, reject non-calls, escalate the rest)
-        if: always()
+        if: always() && steps.guard.outputs.skip != 'true'
         run: node scripts/cineradar/auto-review.mjs --apply
         env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           AUTO_APPROVE_LIMIT: "15"
+      - name: Harvest directories for new official sources (no facts copied)
+        if: always() && steps.guard.outputs.skip != 'true'
+        continue-on-error: true
+        run: node scripts/cineradar/harvest-directories.mjs --apply
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          HTTP_TIMEOUT_MS: "12000"
+          HARVEST_DIRECTORY_LIMIT: "12"
+          HARVEST_PAGES_PER_DIRECTORY: "40"
+          HARVEST_TIME_BUDGET_SECONDS: "240"
