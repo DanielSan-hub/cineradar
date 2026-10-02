@@ -82,6 +82,24 @@ fallback (skip if a dispatched run exists in the last 10 h). Owner action:
 create a fine-grained PAT (this repo only, Actions read/write), store it with
 `vault.create_secret(..., 'cineradar_github_dispatch_token')`, apply the
 migration. Worst-case minutes with guards: 1,856/month.
+First harvest + dispatched runs (2026-10-02): 139 sources registered (40 AI),
+89 records inserted in one discovery run, AFC match 34 -> 43 of 90, public
+catalogue 17 -> 25. The guard verified in production (late schedule skipped).
+Update 2026-10-02 (features, owner: "procedi con le altre automazioni e
+feature"): auto-review v4 maintains every published record daily (archive a
+day after a passed deadline, archive same organizer+deadline+name duplicates,
+strip page labels from names such as "Submit"/"Regulations –", AI category
+from the event's own name). Public site: `/o/[slug]` page per opportunity
+(quoted deadline, links, last check, JSON-LD without invented dates), quick
+filters with counts (AI film, closing in 14 days, free entry, cash prize),
+countdown badges, entry fee on cards, `sitemap.xml`, `robots.txt`; the public
+query never returns a passed deadline. Weekly brief (roadmap P4):
+`weekly-brief.mjs` runs Sundays in the revalidate workflow, stored in
+`weekly_briefs` (`202610020002_weekly_briefs.sql`, owner must apply), shown at
+`/team/brief` and in the `/team` sidebar. These UI changes need a Sites deploy
+(Codex). Known next lever: 562 pending records have no deadline; only 20 quote
+a day/month without a year (7 AI) - most need the call's subpage, not year
+inference.
 
 Owner approval 2026-09-28: Exa has its own budget pool of at most 9/month
 (ledger units; USD is counted 1:1 so real spend stays <= USD 9). All other

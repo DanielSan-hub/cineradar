@@ -74,7 +74,7 @@ RPC and scores readiness; `/team` gains a "Ready to publish" tab once
   premiere rule; warn on conflicts. No simulation.
 - Show "For our films" in `/team` and fit badges on the review page.
 
-## Priority 4 — weekly brief (proactive, not a data dump)
+## Priority 4 — weekly brief (proactive, not a data dump) — DONE 2026-10-02 (delivery by copy/paste; WhatsApp adapter later)
 
 - Weekly GitHub Actions job builds 5–8 items from the database:
   ACTION NOW (decisions/deadlines in the next 14–30 days), NEW HIGH-VALUE,
@@ -90,7 +90,13 @@ RPC and scores readiness; `/team` gains a "Ready to publish" tab once
 - Rare critical alerts only: major call reopened with a short window,
   deadline or eligibility change on a tracked opportunity.
 
-## Priority 5 — public web app
+## Priority 5 — public web app — first pass DONE 2026-10-02
+
+Delivered: public page per opportunity (`/o/[slug]`, SEO), quick filters
+(AI film, closing in 14 days, free entry, cash prize) with counts, countdown
+badges, entry fee on cards, sitemap/robots, passed deadlines never shown.
+Still open: format/runtime and region filters (need field completeness).
+
 
 - Deadline-first home: closing soon, newly verified, rolling calls.
 - Filters that matter once fields exist: format/runtime, AI policy, fee
