@@ -85,7 +85,28 @@ const MAX_OUTPUT_TOKENS = 2500;
 const THROTTLE_RETRIES = 3;
 const THROTTLE_BACKOFF_MS = 4000;
 let cloudflareExhausted = false;
+let groqUnavailable = false;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Workers AI includes 10,000 neurons a day at no charge on every plan. While
+ * the enforced daily limit stays inside that allowance, Cloudflare usage is
+ * booked at EUR 0 (neurons and list price stay in the usage units), so the
+ * paid-provider budget is left to providers that can actually charge.
+ */
+export function cloudflareCharge(amount, {
+  dailyLimit = config.cloudflareDailyNeuronLimit,
+  freeDaily = config.cloudflareFreeDailyNeurons,
+} = {}) {
+  return Number(dailyLimit) <= Number(freeDaily) ? 0 : amount;
+}
+
+/** Errors after which no Cloudflare inference happened (safe to use Groq). */
+export function cloudflareRefusedBeforeInference(error) {
+  return error?.code === "LLM_PROVIDER_EXHAUSTED"
+    || error?.code === "LLM_THROTTLED"
+    || (error?.code === "BUDGET_BLOCKED" && error?.reason === "daily-provider-limit");
+}
 
 /** Cloudflare error 3036 / "daily free allocation" means: stop for today. */
 export function cloudflareThrottle(body) {
@@ -120,7 +141,7 @@ async function cloudflare(messages, context) {
     provider: "cloudflare",
     operation: context.operation,
     model: config.cloudflareModel,
-    reservedCostEur: reservedUsage.cost_eur,
+    reservedCostEur: cloudflareCharge(reservedUsage.cost_eur),
     usageUnits: {
       reserved_input_tokens: reservedUsage.input_tokens,
       reserved_output_tokens: reservedUsage.output_tokens,
@@ -192,8 +213,8 @@ async function cloudflare(messages, context) {
     await finalizeProviderUsage(reservation.event_id, {
       status: "succeeded",
       usageUnits: actualUsage,
-      estimatedCostEur: actualUsage.cost_eur,
-      providerCost: actualUsage.cost_usd,
+      estimatedCostEur: cloudflareCharge(actualUsage.cost_eur),
+      providerCost: cloudflareCharge(actualUsage.cost_usd),
       providerCurrency: "USD",
       providerRequestId: body.result.request_id ?? response.headers.get("cf-ray"),
       httpStatus: response.status,
@@ -209,7 +230,7 @@ async function cloudflare(messages, context) {
           reserved_output_tokens: reservedUsage.output_tokens,
           reserved_neurons: reservedUsage.neurons,
         },
-        estimatedCostEur: reservedUsage.cost_eur,
+        estimatedCostEur: cloudflareCharge(reservedUsage.cost_eur),
         providerCost: null,
         providerCurrency: "USD",
         httpStatus: error.httpStatus ?? null,
@@ -220,11 +241,27 @@ async function cloudflare(messages, context) {
   }
 }
 
+// Groq's free tier limits tokens per minute, so the prompt sent there is
+// shorter than Cloudflare's; a 429 is refused before inference (no charge).
+const GROQ_TEXT_CHARACTERS = 14_000;
+const GROQ_MAX_OUTPUT_TOKENS = 2000;
+const GROQ_MAX_WAIT_MS = 20_000;
+
+/** Seconds to wait from a Groq 429 (retry-after header or "try again in 7.5s"). */
+export function groqRetryAfterMs(headers, body) {
+  const raw = headers?.get?.("retry-after");
+  const header = raw === null || raw === undefined || raw === "" ? NaN : Number(raw);
+  if (Number.isFinite(header) && header >= 0) return header * 1000;
+  const match = /try again in\s+(?:(\d+)m)?([\d.]+)s/i.exec(String(body?.error?.message ?? ""));
+  if (match) return (Number(match[1] ?? 0) * 60 + Number(match[2])) * 1000;
+  return null;
+}
+
 async function groq(messages, context) {
-  if (!config.groqApiKey) return null;
+  if (!config.groqApiKey || groqUnavailable) return null;
   const reservedUsage = estimateGroqUsage({
     inputTokens: estimateMessageTokens(messages),
-    outputTokens: 4000,
+    outputTokens: GROQ_MAX_OUTPUT_TOKENS,
   });
   const reservation = await reserveProviderUsage({
     idempotencyKey: usageIdempotencyKey([
@@ -247,26 +284,63 @@ async function groq(messages, context) {
     metadata: { source_url: context.url },
   });
   let finalized = false;
+  const release = async (httpStatus, errorCode) => {
+    await finalizeProviderUsage(reservation.event_id, {
+      status: "released",
+      usageUnits: { reserved_input_tokens: reservedUsage.input_tokens, reserved_output_tokens: reservedUsage.output_tokens },
+      estimatedCostEur: 0,
+      providerCurrency: "USD",
+      httpStatus,
+      errorCode,
+    });
+    finalized = true;
+  };
   try {
-    const response = await fetchWithTimeout(
-      "https://api.groq.com/openai/v1/chat/completions",
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${config.groqApiKey}`,
-          "Content-Type": "application/json",
+    let response;
+    let body;
+    for (let attempt = 1; ; attempt += 1) {
+      response = await fetchWithTimeout(
+        "https://api.groq.com/openai/v1/chat/completions",
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${config.groqApiKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: config.groqModel,
+            messages,
+            response_format: { type: "json_object" },
+            max_completion_tokens: GROQ_MAX_OUTPUT_TOKENS,
+            temperature: 0,
+          }),
         },
-        body: JSON.stringify({
-          model: config.groqModel,
-          messages,
-          response_format: { type: "json_object" },
-          max_completion_tokens: 4000,
-          temperature: 0,
-        }),
-      },
-      config.llmTimeoutMs,
-    );
-    const body = await response.json().catch(() => null);
+        config.llmTimeoutMs,
+      );
+      body = await response.json().catch(() => null);
+      if (response.status !== 429) break;
+      const waitMs = groqRetryAfterMs(response.headers, body);
+      if (attempt < 3 && waitMs !== null && waitMs <= GROQ_MAX_WAIT_MS) {
+        await sleep(waitMs + 250);
+        continue;
+      }
+      // A long wait means the daily free quota is used: stop using Groq.
+      groqUnavailable = true;
+      await release(429, "GROQ_RATE_LIMITED");
+      const error = new Error("Groq 429 rate limited");
+      error.code = "LLM_THROTTLED";
+      error.httpStatus = 429;
+      throw error;
+    }
+    if ([400, 401, 403, 404].includes(response.status)) {
+      // Bad key, unknown model or refused request: nothing was generated.
+      groqUnavailable = true;
+      await release(response.status, `GROQ_HTTP_${response.status}`);
+      const error = new Error(`Groq ${response.status} ${String(body?.error?.code ?? "")}`.trim());
+      error.code = "LLM_PROVIDER_UNAVAILABLE";
+      error.httpStatus = response.status;
+      throw error;
+    }
     if (!response.ok || !body) {
       const error = new Error(`Groq ${response.status}`);
       error.httpStatus = response.status;
@@ -305,6 +379,21 @@ async function groq(messages, context) {
   }
 }
 
+function extractionMessages({ url, title, text, links, textCharacters, linkLimit }) {
+  const allowedLinks = [...new Set([url, ...links])]
+    .filter(Boolean)
+    .slice(0, linkLimit)
+    .map((link) => `- ${link}`)
+    .join("\n");
+  return [
+    { role: "system", content: SYSTEM_PROMPT },
+    {
+      role: "user",
+      content: `SOURCE URL: ${url}\nPAGE TITLE: ${title ?? ""}\nALLOWED LINKS:\n${allowedLinks}\n\nPAGE TEXT:\n${String(text ?? "").slice(0, textCharacters)}`,
+    },
+  ];
+}
+
 export async function extractOpportunities({
   url,
   title,
@@ -314,47 +403,37 @@ export async function extractOpportunities({
   operation = "extract",
   contentHash = null,
 }) {
-  const allowedLinks = [...new Set([url, ...links])]
-    .filter(Boolean)
-    .slice(0, 120)
-    .map((link) => `- ${link}`)
-    .join("\n");
-  const messages = [
-    { role: "system", content: SYSTEM_PROMPT },
-    {
-      role: "user",
-      content: `SOURCE URL: ${url}\nPAGE TITLE: ${title ?? ""}\nALLOWED LINKS:\n${allowedLinks}\n\nPAGE TEXT:\n${String(text ?? "").slice(0, 60_000)}`,
-    },
-  ];
-  let output = null;
+  const context = { runId, operation, url, contentHash };
   const cloudflareConfigured = Boolean(
     config.cloudflareAccountId && config.cloudflareApiToken,
   );
+  const groqReady = Boolean(config.groqFallbackEnabled && config.groqApiKey);
+  let output = null;
   if (cloudflareConfigured) {
-    // Do not automatically invoke a second paid provider after Cloudflare was
-    // attempted: a timeout or 5xx can occur after billable inference happened.
-    output = await cloudflare(messages, {
-      runId,
-      operation,
-      url,
-      contentHash,
-    });
-  } else if (config.groqFallbackEnabled) {
-    output = await groq(messages, {
-      runId,
-      operation,
-      url,
-      contentHash,
-    });
+    try {
+      output = await cloudflare(extractionMessages({ url, title, text, links, textCharacters: 60_000, linkLimit: 120 }), context);
+    } catch (error) {
+      // Groq takes over only when Cloudflare refused before any inference
+      // (daily allowance used, throttled, or blocked by the daily limit), so
+      // one page is never billed by two providers.
+      if (!groqReady || groqUnavailable || !cloudflareRefusedBeforeInference(error)) throw error;
+    }
+  }
+  if (!output && groqReady && !groqUnavailable) {
+    output = await groq(extractionMessages({ url, title, text, links, textCharacters: GROQ_TEXT_CHARACTERS, linkLimit: 60 }), context);
   }
   if (!output) {
-    throw new Error(
-      cloudflareConfigured
-        ? "Cloudflare AI returned no extraction"
-        : config.groqFallbackEnabled
-          ? "Enabled Groq provider returned no extraction"
-          : "No enabled LLM provider configured",
+    const error = new Error(
+      groqReady && groqUnavailable
+        ? "No LLM capacity left for this run"
+        : cloudflareConfigured
+          ? "Cloudflare AI returned no extraction"
+          : config.groqFallbackEnabled
+            ? "Enabled Groq provider returned no extraction"
+            : "No enabled LLM provider configured",
     );
+    error.code = groqReady && groqUnavailable ? "LLM_PROVIDER_EXHAUSTED" : undefined;
+    throw error;
   }
   return parseExtractionPayload(output);
 }

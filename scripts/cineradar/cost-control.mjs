@@ -17,6 +17,16 @@ const GROQ_PRICING = Object.freeze({
     inputUsdPerMillion: 0.075,
     outputUsdPerMillion: 0.30,
   }),
+  // Free-tier models are still booked at their paid list price, so the
+  // ledger stays an upper bound if the account is ever upgraded.
+  "meta-llama/llama-4-scout-17b-16e-instruct": Object.freeze({
+    inputUsdPerMillion: 0.11,
+    outputUsdPerMillion: 0.34,
+  }),
+  "llama-3.1-8b-instant": Object.freeze({
+    inputUsdPerMillion: 0.05,
+    outputUsdPerMillion: 0.08,
+  }),
 });
 const EXA_SEARCH_RESERVATION_USD = 0.01;
 

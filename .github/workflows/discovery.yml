@@ -12,7 +12,7 @@ concurrency:
 jobs:
   discover:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 16
     permissions:
       contents: read
       actions: read
@@ -47,7 +47,12 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_AI_MODEL: "@cf/meta/llama-3.1-8b-instruct-fp8-fast"
-          GROQ_FALLBACK_ENABLED: "false"
+          # Groq's free tier takes over only when Cloudflare refused before any
+          # inference (daily allowance used); inactive without GROQ_API_KEY.
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GROQ_FALLBACK_ENABLED: "true"
+          GROQ_MODEL: "meta-llama/llama-4-scout-17b-16e-instruct"
+          BROWSER_RENDER_ENABLED: "true"
           DISCOVERY_QUERY_LIMIT: "6"
           DISCOVERY_RESULT_LIMIT: "5"
           MAX_LLM_CALLS_PER_RUN: "70"
@@ -61,6 +66,19 @@ jobs:
           MONTHLY_BUDGET_EUR: "5"
           USD_TO_EUR_RATE: "1"
           CLOUDFLARE_DAILY_NEURON_LIMIT: "9000"
+      - name: Hunt deadlines on the calls' own Submit/Rules pages (no LLM)
+        if: always() && steps.guard.outputs.skip != 'true'
+        continue-on-error: true
+        run: node scripts/cineradar/hunt-deadlines.mjs --apply
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          BROWSER_RENDER_ENABLED: "true"
+          HTTP_TIMEOUT_MS: "12000"
+          HUNT_LIMIT: "60"
+          HUNT_TIME_BUDGET_SECONDS: "150"
       - name: Triage the review queue (archive expired, score readiness)
         if: always() && steps.guard.outputs.skip != 'true'
         run: node scripts/cineradar/triage.mjs --apply
@@ -73,6 +91,9 @@ jobs:
         env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          BROWSER_RENDER_ENABLED: "true"
           AUTO_APPROVE_LIMIT: "15"
       - name: Harvest directories for new official sources (no facts copied)
         if: always() && steps.guard.outputs.skip != 'true'
@@ -84,4 +105,4 @@ jobs:
           HTTP_TIMEOUT_MS: "12000"
           HARVEST_DIRECTORY_LIMIT: "12"
           HARVEST_PAGES_PER_DIRECTORY: "40"
-          HARVEST_TIME_BUDGET_SECONDS: "180"
+          HARVEST_TIME_BUDGET_SECONDS: "120"

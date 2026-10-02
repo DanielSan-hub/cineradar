@@ -7,14 +7,21 @@
 //   node scripts/cineradar/auto-review.mjs           # dry run
 //   node scripts/cineradar/auto-review.mjs --apply   # write
 
-import { AUTO_REVIEW_VERSION, autoReviewDecision, isExpiredPublication, publicNameChanges } from "../../lib/auto-review.mjs";
-import { scoreCallSignal } from "./call-signal.mjs";
-import { extractDeadline } from "./decision-fields.mjs";
+import {
+  AUTO_REVIEW_VERSION,
+  autoReviewDecision,
+  isExpiredPublication,
+  pageDisciplineContext,
+  publicNameChanges,
+} from "../../lib/auto-review.mjs";
+import { isAiFilmText, scoreCallSignal } from "./call-signal.mjs";
+import { huntDeadline } from "./deadline-hunt.mjs";
 import { mapPool } from "./http.mjs";
 import { seriesKey } from "./registry-seeds.mjs";
 import { createRobotsChecker } from "./robots.mjs";
 import { supabase } from "./supabase.mjs";
 import { isGenericTitle } from "./normalization.mjs";
+import { fetchPageOrRender } from "./browser-render.mjs";
 import { fetchPage } from "./web-validation.mjs";
 
 const apply = process.argv.includes("--apply");
@@ -123,22 +130,49 @@ function siteName(html) {
   return name && !/^(?:home|homepage|welcome|index)$/i.test(name) ? name : null;
 }
 
+function sameSite(left, right) {
+  const base = (url) => {
+    try {
+      const labels = new URL(url).hostname.toLowerCase().replace(/^www\./, "").split(".");
+      return labels.slice(-(labels.at(-1).length === 2 && (labels.at(-2) ?? "").length <= 3 ? 3 : 2)).join(".");
+    } catch {
+      return null;
+    }
+  };
+  return Boolean(base(left)) && base(left) === base(right);
+}
+
 async function checkOfficialPage(row) {
   const url = row.official_url ?? (row.source_type === "official" ? row.source_url : null);
   if (!url) return { ok: false };
   const permission = await robots(url);
   if (!permission.allowed) return { ok: false, reason: permission.reason };
   try {
-    const page = await fetchPage(url);
+    const page = await fetchPageOrRender(url, {}, {
+      allowRender: row.category === "AI film festival" || isAiFilmText(`${row.title} ${row.summary ?? ""}`),
+    });
     const text = page.text ?? "";
-    const signal = scoreCallSignal(text);
+    const signal = scoreCallSignal(text, { lenient: isAiFilmText(text) });
     const quote = row.raw_payload?.decision_fields?.evidence?.deadline ?? row.raw_payload?.evidence?.deadline_quote ?? null;
-    const reread = extractDeadline(text, { title: row.title });
     // The deadline counts as confirmed only when the extractor finds the same
     // date on the page under its own rules (banners for other calls, labels
     // and title proximity). A matching quote alone can be a site-wide banner.
-    const deadlineEvidenceFound = Boolean(reread && row.deadline && reread.deadline === String(row.deadline).slice(0, 10));
-    const quoteStillOnPage = Boolean(quote && fold(text).includes(fold(quote)));
+    const sameDate = (candidate) => Boolean(candidate && row.deadline && candidate.deadline === String(row.deadline).slice(0, 10));
+    let deadlineEvidenceFound = sameDate(huntDeadline(page, { title: row.title }));
+    let quoteStillOnPage = Boolean(quote && fold(text).includes(fold(quote)));
+    let datesText = "";
+    // The deadline hunt reads dates on the call's own Rules/Submit page: re-read
+    // it there when it is on the same site as the official page.
+    const datesUrl = row.deadline_source_url;
+    if (!deadlineEvidenceFound && datesUrl && datesUrl !== page.finalUrl && sameSite(datesUrl, page.finalUrl)
+      && (await robots(datesUrl)).allowed) {
+      const datesPage = await fetchPage(datesUrl).catch(() => null);
+      if (datesPage) {
+        datesText = datesPage.text ?? "";
+        deadlineEvidenceFound = sameDate(huntDeadline(datesPage, { title: row.title }));
+        quoteStillOnPage = quoteStillOnPage || Boolean(quote && fold(datesText).includes(fold(quote)));
+      }
+    }
     return {
       ok: true,
       url,
@@ -146,10 +180,14 @@ async function checkOfficialPage(row) {
       httpStatus: page.httpStatus ?? 200,
       checkedAt: page.checkedAt,
       closed: signal.closed,
-      callSignal: signal.pass,
+      callSignal: signal.pass || Boolean(datesText && scoreCallSignal(datesText).pass),
       deadlineEvidenceFound,
       quoteStillOnPage,
       organizer: siteName(page.html),
+      // A footer "© 2026" says nothing about the call: copyright lines are ignored.
+      mentionsCurrentYear: new RegExp(`\\b(?:${new Date().getUTCFullYear()}|${new Date().getUTCFullYear() + 1})\\b`)
+        .test(`${text}\n${datesText}`.replace(/(?:©|&copy;|&#169;|\(c\)|copyright)[^\n]{0,80}/giu, " ")),
+      ...pageDisciplineContext(`${text}\n${datesText}`),
     };
   } catch (error) {
     return { ok: false, httpStatus: error.httpStatus ?? null };
@@ -172,14 +210,15 @@ async function rpc(row, action, reason, { targetStatus = null, changes = {} } = 
   }).catch((error) => ({ ok: false, error: error.message }));
 }
 
-const fields = "id,title,organizer,category,summary,status,triage_flags,deadline,deadline_status,official_url,official_url_status,source_url,source_type,source_url_status,has_conflict,confidence,review_reason,review_decision,edition_year,raw_payload,updated_at";
+const fields = "id,title,organizer,category,summary,status,triage_flags,deadline,deadline_status,deadline_source_url,official_url,official_url_status,source_url,source_type,source_url_status,has_conflict,confidence,review_reason,review_decision,edition_year,raw_payload,updated_at";
 const rows = await all(`opportunities?select=${fields}&review_decision=in.(pending,approved)&order=id.asc`);
 const pending = rows.filter((row) => row.review_decision === "pending");
 const duplicates = findDuplicates(rows);
 const flags = await supportsFlags();
 
 const decisions = await mapPool(pending, 6, async (row) => {
-  const first = autoReviewDecision(row, { duplicateOf: duplicates.get(row.id) ?? null, genericTitle: isGenericTitle(row.title), page: { ok: true, callSignal: true, deadlineEvidenceFound: true } });
+  // Optimistic first pass (no network): relevance is settled on the page itself.
+  const first = autoReviewDecision(row, { duplicateOf: duplicates.get(row.id) ?? null, genericTitle: isGenericTitle(row.title), page: { ok: true, callSignal: true, deadlineEvidenceFound: true, filmContext: true } });
   // Only records that could be approved need the (network) page check.
   if (first.decision !== "approve" && first.decision !== "human") return { row, ...first };
   const page = await checkOfficialPage(row);
@@ -266,11 +305,48 @@ for (const row of published) {
   if (!publishedGroups.has(key)) publishedGroups.set(key, []);
   publishedGroups.get(key).push(row);
 }
+// Same official page (not a homepage) and no category word that tells two
+// calls apart ("Genre" vs "International" Competition): one call, twice.
+const QUALIFIERS = /\b(?:international|national|genre|student|youth|kids?|children|documentar\w*|animat\w*|short|feature|music\s+video|experimental|screenplay|script|series|vr|xr|immersive|lab|fund|forum|market|residenc\w*|competition\s+\w+)\b/giu;
+const qualifierSet = (title) => [...new Set((fold(title).match(QUALIFIERS) ?? []))].sort().join("|");
+const byPage = new Map();
+for (const row of published) {
+  if (expiredIds.has(row.id) || !row.official_url) continue;
+  let path = "/";
+  try {
+    path = new URL(row.official_url).pathname;
+  } catch {
+    continue;
+  }
+  if (path === "/" || path === "") continue;
+  const key = `${String(row.official_url).replace(/[#?].*$/, "").replace(/\/$/, "")}|${qualifierSet(row.title)}`;
+  if (!byPage.has(key)) byPage.set(key, []);
+  byPage.get(key).push(row);
+}
+const PAGE_LABEL = /\b(?:submissions?|submit|call\s+for|apply|regulations?|rules|guidelines)\b/iu;
+for (const group of byPage.values()) {
+  if (group.length < 2) continue;
+  // Keep the record whose name is a name, not a page label.
+  group.sort((left, right) => Number(PAGE_LABEL.test(left.title)) - Number(PAGE_LABEL.test(right.title))
+    || String(left.id).localeCompare(String(right.id)));
+  for (const row of group.slice(1)) {
+    if (expiredIds.has(row.id)) continue;
+    // Different deadlines on one page can be different programmes (Hot Docs
+    // Festival vs Deal Maker): only a page-label name or the same date is a
+    // duplicate.
+    const sameDay = String(row.deadline ?? "").slice(0, 10) === String(group[0].deadline ?? "").slice(0, 10);
+    if (!sameDay && !PAGE_LABEL.test(row.title)) continue;
+    expired.push({ ...row, duplicateOf: group[0] });
+    expiredIds.add(row.id);
+  }
+}
 for (const group of publishedGroups.values()) {
   if (group.length < 2) continue;
-  group.sort((left, right) => right.title.length - left.title.length || String(left.id).localeCompare(String(right.id)));
-  for (const row of group.slice(1)) {
-    expired.push({ ...row, duplicateOf: group[0] });
+  const remaining = group.filter((row) => !expiredIds.has(row.id));
+  if (remaining.length < 2) continue;
+  remaining.sort((left, right) => right.title.length - left.title.length || String(left.id).localeCompare(String(right.id)));
+  for (const row of remaining.slice(1)) {
+    expired.push({ ...row, duplicateOf: remaining[0] });
     expiredIds.add(row.id);
   }
 }

@@ -44,7 +44,7 @@ export const config = {
   // Exa is a rotating gap/source finder, not the primary discovery engine.
   discoveryQueryLimit: boundedNumber("DISCOVERY_QUERY_LIMIT", 4, { min: 0, max: 24, integer: true }),
   discoveryResultLimit: boundedNumber("DISCOVERY_RESULT_LIMIT", 5, { min: 1, max: 10, integer: true }),
-  maxLlmCalls: boundedNumber("MAX_LLM_CALLS_PER_RUN", 24, { min: 0, max: 80, integer: true }),
+  maxLlmCalls: boundedNumber("MAX_LLM_CALLS_PER_RUN", 24, { min: 0, max: 200, integer: true }),
   // Pages reaching discovery already passed the free call-signal gate.
   freeProcessingLimit: boundedNumber("FREE_PROCESSING_LIMIT", 40, { min: 1, max: 400, integer: true }),
   timeoutMs: boundedNumber("HTTP_TIMEOUT_MS", 12000, { min: 1000, max: 30000, integer: true }),
@@ -66,6 +66,8 @@ export const config = {
   exaMonthlyTargetEur: boundedNumber("EXA_MONTHLY_TARGET_EUR", 7, { min: 0, max: 9 }),
   usdToEurRate: boundedNumber("USD_TO_EUR_RATE", 1, { min: 1, max: 1.5 }),
   cloudflareDailyNeuronLimit: boundedNumber("CLOUDFLARE_DAILY_NEURON_LIMIT", 9000, { min: 0, max: 10000, integer: true }),
+  // Workers AI daily allowance at no charge (Free and Paid plans).
+  cloudflareFreeDailyNeurons: boundedNumber("CLOUDFLARE_FREE_DAILY_NEURONS", 10000, { min: 0, max: 10000, integer: true }),
   historicalPageLimit: boundedNumber("HISTORICAL_PAGE_LIMIT", 10, { min: 5, max: 20, integer: true }),
 };
 

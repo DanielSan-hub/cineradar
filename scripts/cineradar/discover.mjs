@@ -45,7 +45,8 @@ import {
   startRun,
   supabase,
 } from "./supabase.mjs";
-import { canonicalizeUrl, fetchPage } from "./web-validation.mjs";
+import { fetchPageOrRender } from "./browser-render.mjs";
+import { canonicalizeUrl } from "./web-validation.mjs";
 
 let run = null;
 const metrics = createRunMetrics("discovery");
@@ -512,10 +513,10 @@ try {
     try {
       const canUseConditional = existing?.processed_hash
         && existing.processed_hash === existing.content_hash;
-      const page = await fetchPage(candidate.url, canUseConditional ? {
+      const page = await fetchPageOrRender(candidate.url, canUseConditional ? {
         etag: existing.etag,
         lastModified: existing.last_modified,
-      } : {});
+      } : {}, { allowRender: Boolean(candidate.aiSource), runId: run.id });
       incrementMetric(metrics, "fetched");
       const observation = page.notModified
         ? await observeNotModified(page, existing)

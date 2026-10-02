@@ -1,6 +1,49 @@
+import { isAiFilmText } from "./call-signal.mjs";
+import { jsonLdDeadline } from "./deadline-hunt.mjs";
+import { extractDeadline } from "./decision-fields.mjs";
 import { plainText } from "./web-validation.mjs";
 
-const OPPORTUNITY_TERMS = /festival|competition|contest|challenge|grant|fund(?:ing)?|residen(?:cy|ce)|fellowship|\blab\b|open call|call for (?:entries|projects|submissions)|submissions? open|convocatoria|edital|bando|appel (?:a|à) projets|einreichung|wettbewerb|映像.{0,8}(?:公募|募集)|미디어아트.{0,8}공모|影像艺术.{0,8}(?:征集|公開徵集)|دعوة.{0,8}(?:أفلام|مشاريع)/iu;
+const OPPORTUNITY_TERMS = /festival|competition|contest|challenge|grant|fund(?:ing)?|residen(?:cy|ce)|fellowship|\blab\b|\bawards?\b|\bprize\b|\bpremio\b|\bprix\b|\bpreis\b|open call|call for (?:entries|projects|submissions)|submissions? open|convocatoria|edital|bando|concorso|appel (?:a|à) projets|einreichung|wettbewerb|映像.{0,8}(?:公募|募集)|미디어아트.{0,8}공모|影像艺术.{0,8}(?:征集|公開徵集)|دعوة.{0,8}(?:أفلام|مشاريع)/iu;
+const EVENT_TYPES = /^(?:Event|Festival|ScreeningEvent|EducationEvent|ExhibitionEvent|BusinessEvent|Competition)$/;
+
+/** First schema.org event a page declares about itself: name and organizer. */
+function jsonLdEvent(html) {
+  const blocks = String(html ?? "").matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/giu);
+  for (const [, body] of blocks) {
+    let parsed;
+    try {
+      parsed = JSON.parse(body.trim());
+    } catch {
+      continue;
+    }
+    const stack = [parsed];
+    while (stack.length) {
+      const item = stack.pop();
+      if (Array.isArray(item)) {
+        stack.push(...item);
+        continue;
+      }
+      if (!item || typeof item !== "object") continue;
+      if (Array.isArray(item["@graph"])) stack.push(...item["@graph"]);
+      const types = [item["@type"]].flat().map(String);
+      if (!types.some((type) => EVENT_TYPES.test(type)) || typeof item.name !== "string") continue;
+      const organizer = [item.organizer].flat().find((entry) => entry && typeof entry.name === "string");
+      return {
+        name: plainText(item.name).slice(0, 200),
+        organizer: organizer ? plainText(organizer.name).slice(0, 200) : null,
+        description: typeof item.description === "string" ? plainText(item.description).slice(0, 300) : null,
+      };
+    }
+  }
+  return null;
+}
+
+function metaContent(html, name) {
+  return firstMatch(html, [
+    new RegExp(`<meta\\b[^>]*(?:property|name)=["']${name}["'][^>]*content=["']([^"']{2,300})["'][^>]*>`, "iu"),
+    new RegExp(`<meta\\b[^>]*content=["']([^"']{2,300})["'][^>]*(?:property|name)=["']${name}["'][^>]*>`, "iu"),
+  ]);
+}
 const APPLICATION_TERMS = /apply|application|submit|submission|enter now|entries|register|inscri(?:ção|ções|coes)|inscripciones?|candidature|bewerbung|応募|申請|신청|제출|报名|提交|التقديم|تقديم/iu;
 const DIRECTORY_TERMS = /directory|browse all|all opportunities|all festivals|search festivals|filter by|results found|opportunity directory/iu;
 const GENERIC_HEADING = /^(?:open calls?|calls? for (?:entries|projects)|opportunities|applications?|submissions?|grants?|funding|residencies|festivals?|(?:film\s+)?festivals?\s+list(?:ings?)?|(?:film\s+)?festivals?\s+submissions?\s*(?:&|and)\s*deadlines?|get\s+funding\s*(?:&|and)\s*support|competitions?|challenges?|news)(?:\s+20\d{2})?$/iu;
@@ -43,6 +86,7 @@ function categoryFor(text) {
   if (/advertis|branded|commercial|music video/iu.test(text)) return "Advertising competition";
   if (/residen(?:cy|ce)|artist-in-residence|artist in residence/iu.test(text)) return "Residency";
   if (/grant|fund(?:ing)?|fondo|fomento|edital|commission/iu.test(text)) return "Grant";
+  if (isAiFilmText(text) && /festival|awards?|contest|competition|prize|cinema/iu.test(text)) return "AI film festival";
   if (/platform|creator challenge|generative video|AI video|artificial intelligence/iu.test(text)) {
     return /festival/iu.test(text) ? "AI film festival" : "Platform challenge";
   }
@@ -79,18 +123,30 @@ function explicitStatus(text) {
  * Directory/listing pages and uncertain cases deliberately fall through to
  * the LLM path; this function never guesses missing facts.
  */
-export function deterministicPageExtraction(page, { sourceType = "official" } = {}) {
-  const title = pageHeading(page);
+export function deterministicPageExtraction(page, { sourceType = "official", now = Date.now() } = {}) {
+  // A schema.org event the page declares names the call better than its <h1>.
+  const event = jsonLdEvent(page.html);
+  const title = event?.name ?? pageHeading(page);
   const applicationLinks = relevantLinks(page);
   const signal = `${title ?? ""}\n${page.text.slice(0, 12_000)}`;
-  if (!title || GENERIC_HEADING.test(title.trim()) || !OPPORTUNITY_TERMS.test(title)) {
+  if (!title || GENERIC_HEADING.test(title.trim()) || !(OPPORTUNITY_TERMS.test(title) || isAiFilmText(title))) {
     return { disposition: "ambiguous", records: [], reason: "NO_STRONG_TITLE_SIGNAL" };
   }
   if (likelyDirectory(page, applicationLinks)) {
     return { disposition: "ambiguous", records: [], reason: "MULTI_ITEM_DIRECTORY" };
   }
-  const deadline = explicitDeadline(page.text);
+  const dated = extractDeadline(page.text, { now, title });
+  const structured = jsonLdDeadline(page.html, { now });
+  const legacy = explicitDeadline(page.text);
+  const deadline = dated
+    ? { value: dated.deadline, evidence: dated.evidence }
+    : structured
+      ? { value: structured.deadline, evidence: structured.evidence }
+      : legacy;
   const status = explicitStatus(page.text);
+  // Organizer and summary only from what the page declares about itself.
+  const organizer = event?.organizer ?? metaContent(page.html, "og:site_name");
+  const summary = event?.description ?? metaContent(page.html, "og:description") ?? metaContent(page.html, "description") ?? "";
   const application = applicationLinks[0]?.url ?? null;
   if (!application && !deadline && !/(?:open call|submissions? open|call for (?:entries|projects|submissions))/iu.test(signal)) {
     return { disposition: "ambiguous", records: [], reason: "NO_APPLICATION_OR_DEADLINE" };
@@ -102,8 +158,8 @@ export function deterministicPageExtraction(page, { sourceType = "official" } = 
     records: [{
       relevant: true,
       title,
-      organizer: "Unknown organizer",
-      category: categoryFor(title),
+      organizer: organizer && !/^(?:home|homepage|welcome|index)$/i.test(organizer) ? organizer : "Unknown organizer",
+      category: categoryFor(`${title} ${organizer ?? ""}`),
       ai_policy: "unclear",
       deadline: deadline?.value ?? null,
       deadline_status: deadline ? "confirmed" : "unknown",
@@ -122,12 +178,13 @@ export function deterministicPageExtraction(page, { sourceType = "official" } = 
       official_url: sourceType === "official" ? page.finalUrl : null,
       application_url: application,
       source_type: sourceType,
-      summary: "",
+      summary: String(summary).slice(0, 300),
       eligibility: [],
       formats: [],
-      tags: ["deterministic-extraction"],
+      tags: ["deterministic-extraction", ...(event ? ["json-ld"] : [])],
       field_evidence: {
         title,
+        ...(organizer ? { organizer } : {}),
         ...(online ? { location: "Online" } : {}),
       },
     }],

@@ -33,9 +33,9 @@ import {
 } from "./supabase.mjs";
 import {
   canonicalizeUrl,
-  fetchPage,
   selectSourceOpportunityLinks,
 } from "./web-validation.mjs";
+import { fetchPageOrRender } from "./browser-render.mjs";
 
 let run = null;
 const metrics = createRunMetrics("monitor");
@@ -151,10 +151,13 @@ async function fetchObserved(url, source, existing, { forceBody = false } = {}) 
   const useConditional = !forceBody
     && existing?.processed_hash
     && existing.processed_hash === existing.content_hash;
-  const page = await fetchPage(url, useConditional ? {
+  // AI and other high-priority sites built as JavaScript apps are rendered
+  // in a headless browser (capped per day) when the plain fetch is empty.
+  const page = await fetchPageOrRender(url, useConditional ? {
     etag: existing.etag,
     lastModified: existing.last_modified,
-  } : {});
+  } : {}, { allowRender: isAiSource(source) || Number(source.priority ?? 3) < 3, runId: run?.id ?? null });
+  if (page.rendered) incrementMetric(metrics, "rendered");
   incrementMetric(metrics, "fetched");
   const observation = page.notModified
     ? await observeNotModified(page, existing)
