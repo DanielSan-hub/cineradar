@@ -20,7 +20,7 @@ import { mapPool } from "./http.mjs";
 import { finalFesthomeDeadline, parseFesthomeDeadlines } from "./platform-connectors.mjs";
 import { seriesKey } from "./registry-seeds.mjs";
 import { createRobotsChecker } from "./robots.mjs";
-import { platformOf } from "./series-extraction.mjs";
+import { platformOf, seriesEvidence } from "./series-extraction.mjs";
 import { supabase } from "./supabase.mjs";
 import { isGenericTitle } from "./normalization.mjs";
 import { fetchPageOrRender } from "./browser-render.mjs";
@@ -181,10 +181,13 @@ async function checkOfficialPage(row) {
         quoteStillOnPage = quoteStillOnPage || Boolean(quote && fold(datesText).includes(fold(quote)));
       }
     }
+    // The organizer's own statement that submissions are open, read again now.
+    const statement = seriesEvidence([page], { title: row.title });
     return {
       ok: true,
       url,
       finalUrl: page.finalUrl,
+      openStatementFound: Boolean(statement.open) && !statement.closed,
       httpStatus: page.httpStatus ?? 200,
       checkedAt: page.checkedAt,
       closed: signal.closed,
@@ -282,7 +285,7 @@ const flags = await supportsFlags();
 
 const decisions = await mapPool(pending, 6, async (row) => {
   // Optimistic first pass (no network): relevance is settled on the page itself.
-  const first = autoReviewDecision(row, { duplicateOf: duplicates.get(row.id) ?? null, genericTitle: isGenericTitle(row.title), page: { ok: true, callSignal: true, deadlineEvidenceFound: true, filmContext: true, directoryPage: isDirectoryPage(row.official_url ?? row.source_url, row.title) } });
+  const first = autoReviewDecision(row, { duplicateOf: duplicates.get(row.id) ?? null, genericTitle: isGenericTitle(row.title), page: { ok: true, callSignal: true, deadlineEvidenceFound: true, openStatementFound: true, filmContext: true, directoryPage: isDirectoryPage(row.official_url ?? row.source_url, row.title) } });
   // Only records that could be approved need the (network) page check.
   if (first.decision !== "approve" && first.decision !== "human") return { row, ...first };
   const page = await checkOfficialPage(row);
@@ -440,18 +443,31 @@ if (apply) {
   }
 }
 
-const recheck = rows
-  .filter((row) => row.review_decision === "approved" && autoApproved.has(row.id) && !expiredIds.has(row.id))
-  .map((row) => ({
+const republished = rows.filter((row) => row.review_decision === "approved" && autoApproved.has(row.id) && !expiredIds.has(row.id));
+// A call published without a date rests on its page's open-call statement
+// (a dated call leaves with its deadline): that page is read again every run.
+// A page that cannot be read right now keeps the call; a page that is gone
+// (404/410) or no longer says submissions are open withdraws it.
+const undatedCall = (row) => !row.deadline && row.deadline_status !== "rolling";
+const livePages = new Map(await mapPool(republished.filter(undatedCall).slice(0, 200), 6,
+  async (row) => [row.id, await checkOfficialPage(row)]));
+const recheck = republished.map((row) => {
+  const live = livePages.get(row.id);
+  const page = live && (live.ok || [404, 410].includes(live.httpStatus))
+    ? live
+    : { ok: true, httpStatus: 200, finalUrl: row.official_url, callSignal: true, deadlineEvidenceFound: true, openStatementFound: true, closed: false, organizer: null, filmContext: true, directoryPage: isDirectoryPage(row.official_url, row.title) };
+  return {
     row,
     ...autoReviewDecision(row, {
       duplicateOf: duplicates.get(row.id) ?? null,
       genericTitle: isGenericTitle(row.title),
-      page: { ok: true, httpStatus: 200, finalUrl: row.official_url, callSignal: true, deadlineEvidenceFound: true, closed: false, organizer: null, filmContext: true, directoryPage: isDirectoryPage(row.official_url, row.title) },
+      page,
     }),
-  }));
+  };
+});
 summary.recheck = {
   published_by_automation: recheck.length,
+  undated_pages_read: livePages.size,
   withdraw: recheck.filter((item) => item.decision !== "approve").map((item) => `${item.row.title.slice(0, 55)} — ${item.reasons.join(" ").slice(0, 100)}`),
   rename: recheck.filter((item) => item.decision === "approve" && Object.keys(item.changes ?? {}).length)
     .map((item) => `${item.row.title.slice(0, 50)} → ${JSON.stringify(item.changes).slice(0, 110)}`),

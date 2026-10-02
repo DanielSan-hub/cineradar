@@ -149,3 +149,24 @@ test("published calls expire a day after a recorded deadline; rolling calls neve
   assert.equal(isExpiredPublication({ deadline: "2026-09-01T00:00:00Z", deadline_status: "rolling" }, { now }), false);
   assert.equal(isExpiredPublication({ deadline: null, deadline_status: "unknown" }, { now }), false);
 });
+
+test("v5: an organizer's own 'submissions are open' with a platform link publishes as verified without a date", () => {
+  const undated = {
+    ...live,
+    deadline: null,
+    deadline_status: "unknown",
+    application_url: "https://filmfreeway.com/KinoAthens",
+    raw_payload: { extraction: { series_evidence: { method: "series-anchored-v1", open_quote: "SUBMIT Submissions are now open for KINO Athens 2027" } } },
+  };
+  const page = { ...goodPage, deadlineEvidenceFound: false, openStatementFound: true, mentionsCurrentYear: true };
+  const result = autoReviewDecision(undated, { now: NOW, page });
+  assert.equal(result.decision, "approve");
+  assert.equal(result.targetStatus, "verified");
+  assert.ok(result.reasons.some((text) => /submission platform/.test(text)));
+  // The statement must still be on the page, with the current or next year.
+  assert.equal(autoReviewDecision(undated, { now: NOW, page: { ...page, openStatementFound: false } }).decision, "human");
+  assert.equal(autoReviewDecision(undated, { now: NOW, page: { ...page, mentionsCurrentYear: false } }).decision, "human");
+  // Without a quoted statement or without a submission link: nothing to publish yet.
+  assert.equal(autoReviewDecision({ ...undated, raw_payload: {} }, { now: NOW, page }).decision, "watch");
+  assert.equal(autoReviewDecision({ ...undated, application_url: null }, { now: NOW, page }).decision, "watch");
+});

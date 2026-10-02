@@ -43,7 +43,7 @@ import {
 } from "@/components/ui/sheet";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { mergeUniqueById } from "@/lib/opportunity-pagination.mjs";
-import { deadlineCountdown, formatDeadline, formatMoney } from "@/lib/opportunity-format";
+import { deadlineCountdown, deadlinePlatform, formatDeadline, formatMoney, platformApplyUrl, platformCountdown } from "@/lib/opportunity-format";
 import type {
   OpportunitiesPage,
   Opportunity,
@@ -566,7 +566,7 @@ export function RadarApp({
               <div className="flex-1 overflow-y-auto px-6 py-5">
                 <p className="text-base leading-7 text-slate-300">{selected.summary}</p>
                 <div className="mt-6 grid grid-cols-2 gap-3">
-                  <DetailStat icon={<CalendarDays />} label="Deadline" value={formatDeadline(selected.deadline, selected.deadlineStatus)} />
+                  <DetailStat icon={<CalendarDays />} label="Deadline" value={deadlineLabel(selected)} />
                   <DetailStat icon={<CircleDollarSign />} label="Prize" value={formatMoney(selected.prizeAmount, selected.prizeCurrency)} />
                   <DetailStat icon={<Film />} label="Max runtime" value={selected.maxRuntimeMinutes ? `${selected.maxRuntimeMinutes} min` : "Not stated"} />
                   <DetailStat icon={<MapPin />} label="Location" value={selected.location} />
@@ -606,8 +606,15 @@ function FilterControls({ category, setCategory, aiPolicy, setAiPolicy }: { cate
   return <div className="space-y-4"><label className="block text-sm text-slate-400"><span className="mb-2 block">Opportunity type</span><Select value={category} onValueChange={setCategory}><SelectTrigger className="w-full border-white/10 bg-white/4 text-slate-200"><SelectValue>{category === "all" ? "All types" : category}</SelectValue></SelectTrigger><SelectContent className="border-white/10 bg-[#101b25] text-slate-100"><SelectItem value="all">All types</SelectItem>{categories.map((item) => <SelectItem key={item} value={item}>{item}</SelectItem>)}</SelectContent></Select></label><label className="block text-sm text-slate-400"><span className="mb-2 block">AI policy</span><Select value={aiPolicy} onValueChange={setAiPolicy}><SelectTrigger className="w-full border-white/10 bg-white/4 text-slate-200"><SelectValue>{aiPolicy === "all" ? "Any policy" : aiPolicy === "required" ? "AI required" : aiPolicy === "allowed" ? "AI allowed" : aiPolicy === "restricted" ? "Restricted" : "Unclear"}</SelectValue></SelectTrigger><SelectContent className="border-white/10 bg-[#101b25] text-slate-100"><SelectItem value="all">Any policy</SelectItem><SelectItem value="required">AI required</SelectItem><SelectItem value="allowed">AI allowed</SelectItem><SelectItem value="restricted">Restricted</SelectItem><SelectItem value="unclear">Unclear</SelectItem></SelectContent></Select></label></div>;
 }
 
+/** "On FilmFreeway" for an open call whose deadline is kept on its submission platform. */
+function deadlineLabel(opportunity: Opportunity) {
+  const platform = deadlinePlatform(opportunity);
+  return platform ? `On ${platform}` : formatDeadline(opportunity.deadline, opportunity.deadlineStatus);
+}
+
 function OpportunityCard({ opportunity, saved, onSave, onOpen }: { opportunity: Opportunity; saved: boolean; onSave: () => void; onOpen: () => void }) {
-  const countdown = deadlineCountdown(opportunity.deadline, opportunity.deadlineStatus);
+  const platform = deadlinePlatform(opportunity);
+  const countdown = platform ? platformCountdown(platform) : deadlineCountdown(opportunity.deadline, opportunity.deadlineStatus);
   const footerClass = "mt-5 flex w-full items-center justify-between rounded-xl bg-white/[0.045] px-4 py-3 text-sm font-medium text-slate-200 transition hover:bg-cyan-300/10 hover:text-cyan-100";
   return (
     <article className="group relative flex min-h-[310px] flex-col overflow-hidden rounded-2xl border border-white/8 bg-[linear-gradient(155deg,rgba(255,255,255,.045),rgba(255,255,255,.018))] p-5 transition duration-300 hover:-translate-y-0.5 hover:border-cyan-300/22 hover:shadow-[0_24px_80px_rgba(0,0,0,.22)] sm:p-6">
@@ -626,7 +633,7 @@ function OpportunityCard({ opportunity, saved, onSave, onOpen }: { opportunity: 
       </button>
       <div className="mt-auto pt-6">
         <div className="grid grid-cols-3 gap-3 border-t border-white/8 pt-4 text-sm">
-          <div><p className="flex items-center gap-1.5 text-xs text-slate-500"><CalendarDays className="size-3.5" /> Deadline</p><p className="mt-1 font-medium text-slate-200">{formatDeadline(opportunity.deadline, opportunity.deadlineStatus)}</p></div>
+          <div><p className="flex items-center gap-1.5 text-xs text-slate-500"><CalendarDays className="size-3.5" /> Deadline</p><p className="mt-1 font-medium text-slate-200">{deadlineLabel(opportunity)}</p></div>
           <div><p className="flex items-center gap-1.5 text-xs text-slate-500"><Ticket className="size-3.5" /> Entry</p><p className="mt-1 font-medium text-slate-200">{formatMoney(opportunity.entryFeeAmount, opportunity.entryFeeCurrency)}</p></div>
           <div><p className="flex items-center gap-1.5 text-xs text-slate-500"><CircleDollarSign className="size-3.5" /> Prize</p><p className="mt-1 font-medium text-slate-200">{formatMoney(opportunity.prizeAmount, opportunity.prizeCurrency, { free: "None stated" })}</p></div>
         </div>
@@ -643,18 +650,21 @@ function OpportunityLinks({ opportunity }: { opportunity: Opportunity }) {
   const officialUrl = opportunity.officialUrlVerified
     ? displayableUrl(opportunity.officialUrl, opportunity.demo)
     : null;
+  const platform = deadlinePlatform(opportunity);
+  // An open call whose deadline is on its platform links there (the link comes
+  // from the organizer's own page; CineRadar never fetches the platform).
   const applicationUrl = opportunity.applicationUrlVerified
     ? displayableUrl(opportunity.applicationUrl, opportunity.demo)
-    : null;
+    : displayableUrl(platformApplyUrl(opportunity.applicationUrl, platform), opportunity.demo);
   const links = [
     { label: "Official website", url: officialUrl },
-    { label: "Apply", url: applicationUrl },
+    { label: platform && !opportunity.applicationUrlVerified ? `Apply on ${platform}` : "Apply", url: applicationUrl },
     { label: "Source", url: sourceUrl },
   ].filter((link): link is { label: string; url: string } => Boolean(link.url));
 
   if (!links.length) return <span className="self-center text-sm text-slate-500">No verified link</span>;
   return links.map((link) => (
-    <Button key={link.label} asChild variant={link.label === "Apply" ? "default" : "outline"} className={link.label === "Apply" ? "bg-cyan-300 text-[#061018] hover:bg-cyan-200" : "border-white/12 bg-white/4 text-white hover:bg-white/8"}>
+    <Button key={link.label} asChild variant={link.label.startsWith("Apply") ? "default" : "outline"} className={link.label.startsWith("Apply") ? "bg-cyan-300 text-[#061018] hover:bg-cyan-200" : "border-white/12 bg-white/4 text-white hover:bg-white/8"}>
       <a href={link.url} target="_blank" rel="noreferrer">{link.label} <ArrowUpRight /></a>
     </Button>
   ));

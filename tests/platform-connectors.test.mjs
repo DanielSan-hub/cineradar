@@ -104,3 +104,18 @@ test("a passed final deadline is closed and a page without a calendar gives noth
   // Without a website link the record keeps no official URL (never guessed).
   assert.equal(festhomeRawItem({ page: festivalPage(), now: NOW }).official_url, null);
 });
+
+test("an open call without a date shows its platform and links there; dated calls do not", async () => {
+  const { deadlinePlatform, platformApplyUrl, platformCountdown } = await import("../lib/opportunity-format.ts");
+  const call = { deadline: null, deadlineStatus: "unknown", tags: ["series-anchored", "via-filmfreeway"] };
+  assert.equal(deadlinePlatform(call), "FilmFreeway");
+  assert.equal(deadlinePlatform({ ...call, deadline: "2026-11-01", deadlineStatus: "confirmed" }), null);
+  assert.equal(deadlinePlatform({ ...call, deadlineStatus: "rolling" }), null);
+  assert.equal(deadlinePlatform({ ...call, tags: ["series-anchored"] }), null);
+  assert.equal(platformCountdown("FilmFreeway").detail, "Deadline on FilmFreeway");
+  // Only a link on that platform's own host is shown, never another site.
+  assert.equal(platformApplyUrl("https://filmfreeway.com/KinoAthens", "FilmFreeway"), "https://filmfreeway.com/KinoAthens");
+  assert.equal(platformApplyUrl("https://evil.example/filmfreeway.com", "FilmFreeway"), null);
+  assert.equal(platformApplyUrl("javascript:alert(1)", "FilmFreeway"), null);
+  assert.equal(platformApplyUrl("https://filmfreeway.com/KinoAthens", null), null);
+});

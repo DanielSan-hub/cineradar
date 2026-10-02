@@ -17,7 +17,7 @@ import {
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
-import { deadlineCountdown, formatDeadline, formatMoney, aiPolicyLabel } from "@/lib/opportunity-format";
+import { deadlineCountdown, deadlinePlatform, formatDeadline, formatMoney, aiPolicyLabel, platformApplyUrl, platformCountdown } from "@/lib/opportunity-format";
 import { getPublicOpportunity } from "@/lib/server/data";
 import type { Opportunity } from "@/lib/types";
 
@@ -72,9 +72,14 @@ export default async function OpportunityPage({ params }: PageProps) {
   const result = await getPublicOpportunity(slug).catch(() => null);
   if (!result) notFound();
   const { opportunity, deadlineQuote } = result;
-  const countdown = deadlineCountdown(opportunity.deadline, opportunity.deadlineStatus);
+  // An open call whose deadline is kept on its submission platform links
+  // there (the link comes from the organizer's own page).
+  const platform = deadlinePlatform(opportunity);
+  const countdown = platform ? platformCountdown(platform) : deadlineCountdown(opportunity.deadline, opportunity.deadlineStatus);
   const officialUrl = verifiedLink(opportunity.officialUrl, opportunity.officialUrlVerified);
-  const applicationUrl = verifiedLink(opportunity.applicationUrl, opportunity.applicationUrlVerified);
+  const applicationUrl = verifiedLink(opportunity.applicationUrl, opportunity.applicationUrlVerified)
+    ?? platformApplyUrl(opportunity.applicationUrl, platform);
+  const applyLabel = platform && !opportunity.applicationUrlVerified ? `Apply on ${platform}` : "Apply";
   const sourceUrl = verifiedLink(opportunity.sourceUrl, true);
   const lastChecked = formatDate(opportunity.officialUrlLastCheckedAt ?? opportunity.verifiedAt);
   const closed = countdown.tone === "closed";
@@ -127,7 +132,7 @@ export default async function OpportunityPage({ params }: PageProps) {
 
         <div className="mt-8 flex flex-wrap gap-3">
           {applicationUrl && !closed && (
-            <a href={applicationUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-xl bg-cyan-300 px-5 py-3 text-sm font-semibold text-[#061018] transition hover:bg-cyan-200">Apply <ArrowUpRight className="size-4" /></a>
+            <a href={applicationUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-xl bg-cyan-300 px-5 py-3 text-sm font-semibold text-[#061018] transition hover:bg-cyan-200">{applyLabel} <ArrowUpRight className="size-4" /></a>
           )}
           {officialUrl && (
             <a href={officialUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-xl border border-white/12 bg-white/4 px-5 py-3 text-sm font-medium text-white transition hover:bg-white/8">Official page <ArrowUpRight className="size-4" /></a>
@@ -138,7 +143,7 @@ export default async function OpportunityPage({ params }: PageProps) {
         </div>
 
         <section className="mt-10 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          <Fact icon={<CalendarDays />} label="Deadline" value={formatDeadline(opportunity.deadline, opportunity.deadlineStatus)} detail={countdown.detail} />
+          <Fact icon={<CalendarDays />} label="Deadline" value={platform ? `On ${platform}` : formatDeadline(opportunity.deadline, opportunity.deadlineStatus)} detail={countdown.detail} />
           <Fact icon={<Ticket />} label="Entry fee" value={formatMoney(opportunity.entryFeeAmount, opportunity.entryFeeCurrency, { free: "Free entry" })} />
           <Fact icon={<CircleDollarSign />} label="Prize or funding" value={formatMoney(opportunity.prizeAmount, opportunity.prizeCurrency, { free: "None stated" })} />
           <Fact icon={<Sparkles />} label="AI policy" value={aiPolicyLabel(opportunity.aiPolicy)} />

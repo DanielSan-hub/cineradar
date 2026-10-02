@@ -61,3 +61,46 @@ export function aiPolicyLabel(policy: AiPolicy) {
     default: return "Not stated";
   }
 }
+
+// Submission platforms a call can point to. A call published without a date
+// (its organizer says submissions are open and links to one of these, where
+// the deadline is kept) carries the tag "via-<slug>".
+const SUBMISSION_PLATFORMS = [
+  { slug: "filmfreeway", name: "FilmFreeway", host: "filmfreeway.com" },
+  { slug: "festhome", name: "Festhome", host: "festhome.com" },
+  { slug: "shortfilmdepot", name: "ShortFilmDepot", host: "shortfilmdepot.com" },
+  { slug: "movibeta", name: "Movibeta", host: "movibeta.com" },
+  { slug: "click-for-festivals", name: "Click for Festivals", host: "clickforfestivals.com" },
+  { slug: "filmfestplatform", name: "FilmFestPlatform", host: "filmfestplatform.com" },
+  { slug: "submittable", name: "Submittable", host: "submittable.com" },
+  { slug: "filmchief", name: "FilmChief", host: "filmchief.com" },
+  { slug: "festagent", name: "FestAgent", host: "festagent.com" },
+] as const;
+
+type PlatformCall = { deadline: string | null; deadlineStatus?: DeadlineStatus; tags?: string[] };
+
+/** The platform that holds the deadline of a call published without a date, or null. */
+export function deadlinePlatform({ deadline, deadlineStatus, tags }: PlatformCall) {
+  if (deadline || deadlineStatus === "rolling") return null;
+  const slug = (tags ?? []).find((tag) => tag.startsWith("via-"))?.slice(4);
+  return SUBMISSION_PLATFORMS.find((platform) => platform.slug === slug)?.name ?? null;
+}
+
+/** Badge for an open call whose deadline is on its submission platform. */
+export function platformCountdown(platform: string) {
+  return { tone: "open" as const, label: "Submissions open", detail: `Deadline on ${platform}`, days: null, badgeClass: TONE_CLASS.rolling };
+}
+
+/** The submission link on that platform (taken from the organizer's own page), or null. */
+export function platformApplyUrl(url: string | null | undefined, platform: string | null) {
+  const entry = SUBMISSION_PLATFORMS.find((item) => item.name === platform);
+  if (!url || !entry) return null;
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.toLowerCase();
+    const onPlatform = host === entry.host || host.endsWith(`.${entry.host}`);
+    return onPlatform && ["http:", "https:"].includes(parsed.protocol) ? parsed.href : null;
+  } catch {
+    return null;
+  }
+}
