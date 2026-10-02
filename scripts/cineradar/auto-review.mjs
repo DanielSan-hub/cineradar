@@ -16,6 +16,7 @@ import {
 } from "../../lib/auto-review.mjs";
 import { isAiFilmText, scoreCallSignal } from "./call-signal.mjs";
 import { huntDeadline } from "./deadline-hunt.mjs";
+import { extractDeadline } from "./decision-fields.mjs";
 import { mapPool } from "./http.mjs";
 import { finalFesthomeDeadline, parseFesthomeDeadlines } from "./platform-connectors.mjs";
 import { seriesKey } from "./registry-seeds.mjs";
@@ -132,6 +133,14 @@ function siteName(html) {
   return name && !/^(?:home|homepage|welcome|index)$/i.test(name) ? name : null;
 }
 
+function isSiteRoot(url) {
+  try {
+    return /^\/(?:[a-z]{2}(?:-[a-z]{2})?\/?)?(?:index\.\w+|home\/?)?$/i.test(new URL(url).pathname);
+  } catch {
+    return true;
+  }
+}
+
 function sameSite(left, right) {
   const base = (url) => {
     try {
@@ -169,7 +178,12 @@ async function checkOfficialPage(row) {
     // it) is re-read with the platform's parser.
     const datesUrl = row.deadline_source_url;
     const platformCalendar = platformOf(datesUrl) === "Festhome";
-    if (!deadlineEvidenceFound && datesUrl && datesUrl !== page.finalUrl
+    // A call's own page (not a homepage) that prints another deadline wins
+    // over a date read elsewhere on the site (a festival's general Submit page).
+    const ownDates = isSiteRoot(page.finalUrl) ? null : extractDeadline(text, { title: row.title });
+    const ownPageDisagrees = Boolean(!platformCalendar && ownDates && row.deadline
+      && ownDates.deadline !== String(row.deadline).slice(0, 10));
+    if (!deadlineEvidenceFound && !ownPageDisagrees && datesUrl && datesUrl !== page.finalUrl
       && (sameSite(datesUrl, page.finalUrl) || platformCalendar) && (await robots(datesUrl)).allowed) {
       const datesPage = await fetchPage(datesUrl).catch(() => null);
       if (datesPage) {
@@ -295,9 +309,15 @@ const decisions = await mapPool(pending, 6, async (row) => {
 const summary = { mode: apply ? "apply" : "dry-run", version: AUTO_REVIEW_VERSION, pending: pending.length, approve_limit: approveLimit, counts: {}, applied: {}, errors: 0 };
 for (const item of decisions) summary.counts[item.decision] = (summary.counts[item.decision] ?? 0) + 1;
 
+// Within the per-run cap, AI calls are published first, then the calls that
+// close soonest (calls with a date before those without).
+const isAiCall = (row) => row.category === "AI film festival" || isAiFilmText(`${row.title} ${row.summary ?? ""}`);
+const closesAt = (row) => (row.deadline ? Date.parse(row.deadline) : Infinity);
+const approvals = decisions.filter((item) => item.decision === "approve")
+  .sort((left, right) => Number(isAiCall(right.row)) - Number(isAiCall(left.row)) || closesAt(left.row) - closesAt(right.row));
 if (apply) {
   let approved = 0;
-  for (const item of decisions) {
+  for (const item of [...approvals, ...decisions.filter((entry) => entry.decision !== "approve")]) {
     const { row, decision, reasons } = item;
     let result = null;
     if (decision === "approve") {

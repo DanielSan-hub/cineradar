@@ -192,3 +192,14 @@ test("banners, JSON and escaped HTML are not deadlines", () => {
   assert.equal(extractDeadline('{"deadline" : "2026-08-15"}', { now: NOW }), null);
   assert.equal(extractDeadline("Submission deadline\x3C/p>\x3Ctd>Sep 15, 2026", { now: NOW }), null);
 });
+
+test("a tier list under a Deadlines heading closes on its last tier; tiers without the heading do not count", () => {
+  const now = Date.parse("2026-10-03T10:00:00Z");
+  const page = "COMPETITION CATEGORIES: • Feature Screenplays • Short Screenplays DEADLINES: Super Earlybird: May 31, 2026 Earlybird: July 31, 2026 Regular: September 30, 2026 Late: November 30, 2026 Extended: December 31, 2026 AWARDS AND PRIZES: 1st place";
+  const found = extractDeadline(page, { now, title: "Screenplay Competition" });
+  assert.equal(found.deadline, "2026-12-31");
+  assert.equal(found.evidence, "Extended: December 31, 2026");
+  assert.equal(extractDeadline("Regular: September 30, 2026 Late: November 30, 2026", { now }), null);
+  // The list ends at the first line that is not a tier (notifications, festival dates).
+  assert.equal(extractDeadline("Key dates\nEarly: 1 May 2026\nNotification: 1 November 2026", { now }).deadline, "2026-05-01");
+});

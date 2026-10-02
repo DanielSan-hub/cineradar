@@ -10,10 +10,11 @@
 
 import { isAiFilmText } from "./call-signal.mjs";
 import { evidenceNearTitle, huntDeadline, huntLinks, isApplyPage } from "./deadline-hunt.mjs";
-import { extractDecisionFields, DECISION_FIELDS_VERSION } from "./decision-fields.mjs";
+import { extractDeadline, extractDecisionFields, DECISION_FIELDS_VERSION } from "./decision-fields.mjs";
 import { mapPool } from "./http.mjs";
 import { BLOCKED_HOSTS } from "./registry-seeds.mjs";
 import { createRobotsChecker } from "./robots.mjs";
+import { platformOf } from "./series-extraction.mjs";
 import { supabase } from "./supabase.mjs";
 import { fetchPageOrRender } from "./browser-render.mjs";
 
@@ -36,10 +37,19 @@ const blocked = (url) => {
   }
 };
 
-const fields = "id,title,organizer,category,summary,deadline,deadline_status,official_url,source_url,source_type,application_url,max_runtime_minutes,entry_fee_amount,ai_policy,readiness_score,updated_at,created_at,raw_payload";
+const fields = "id,title,organizer,category,summary,deadline,deadline_status,deadline_source_url,official_url,source_url,source_type,application_url,max_runtime_minutes,entry_fee_amount,ai_policy,readiness_score,updated_at,created_at,raw_payload";
+// A site's homepage (or a language root) announces several calls; any other
+// page is the call's own page.
+const isSiteRoot = (url) => {
+  try {
+    return /^\/(?:[a-z]{2}(?:-[a-z]{2})?\/?)?(?:index\.\w+|home\/?)?$/i.test(new URL(url).pathname);
+  } catch {
+    return true;
+  }
+};
 const rows = [];
 for (let offset = 0; ; offset += 1000) {
-  const batch = await supabase(`opportunities?select=${fields}&review_decision=eq.pending&or=(deadline.is.null,deadline_status.eq.unknown)&order=id.asc&limit=1000&offset=${offset}`);
+  const batch = await supabase(`opportunities?select=${fields}&review_decision=eq.pending&order=id.asc&limit=1000&offset=${offset}`);
   rows.push(...batch);
   if (batch.length < 1000) break;
 }
@@ -64,7 +74,21 @@ for (const row of await supabase("opportunities?select=title,official_url,source
 }
 const lastHunt = (row) => Date.parse(row.raw_payload?.deadline_hunt?.checked_at ?? "");
 const isAi = (row) => row.category === "AI film festival" || isAiFilmText(`${row.title} ${row.organizer ?? ""} ${row.summary ?? ""}`);
+// A date read on another page of the site (a festival's general Submit page)
+// may belong to another call than this record's own page: hunted again, own
+// page first. Dates kept on a submission platform's calendar are not.
+const pathOf = (url) => {
+  try {
+    return new URL(url).pathname.replace(/\/+$/, "");
+  } catch {
+    return null;
+  }
+};
+const borrowedDeadline = (row) => Boolean(row.deadline_source_url && startUrl(row)
+  && !isSiteRoot(startUrl(row)) && !platformOf(row.deadline_source_url)
+  && pathOf(row.deadline_source_url) !== pathOf(startUrl(row)));
 const candidates = rows
+  .filter((row) => !row.deadline || row.deadline_status === "unknown" || borrowedDeadline(row))
   .filter((row) => startUrl(row) && !blocked(startUrl(row)))
   .filter((row) => {
     const hunted = lastHunt(row);
@@ -108,14 +132,21 @@ await mapPool(candidates, 4, async (row) => {
     }
   }
   // Subpages first: a "Rules" page states this call's own dates, while a
-  // homepage may announce several calls.
+  // homepage may announce several calls. A call's own page (not a homepage)
+  // comes first, and when its own deadline calendar has only passed dates, no
+  // date from another page of the site is taken for it.
+  const ownPage = home && !isSiteRoot(home.finalUrl) ? home : null;
+  const ownDates = ownPage ? extractDeadline(ownPage.text ?? "", { now, title: row.title }) : null;
+  const ownCalendarPassed = Boolean(ownDates && Date.parse(`${ownDates.deadline}T23:59:59Z`) < now - 86_400_000);
+  if (ownCalendarPassed) summary.ownCalendarPassed = (summary.ownCalendarPassed ?? 0) + 1;
+  const order = ownCalendarPassed ? [] : ownPage ? [ownPage, ...subpages] : [...subpages, ...(home ? [home] : [])];
   let hit = null;
   let hitPage = null;
   const titlesOnSite = siteTitles.get(siteOf(startUrl(row))) ?? [];
   const sharedSite = titlesOnSite.length > 1;
   const siblings = titlesOnSite.filter((title) => title !== row.title);
   const exclude = [siteOf(startUrl(row)) ?? "", row.organizer ?? ""];
-  for (const page of [...subpages, ...(home ? [home] : [])]) {
+  for (const page of order) {
     // A site with several records lists several calls: only a date printed
     // next to a word that distinguishes this call belongs to it.
     const accept = sharedSite

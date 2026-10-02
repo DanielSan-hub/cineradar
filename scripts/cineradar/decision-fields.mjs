@@ -235,6 +235,36 @@ function readDate(value) {
   return null;
 }
 
+// A deadline calendar printed as tiers under one heading ("DEADLINES: Super
+// Earlybird: May 31, 2026 Earlybird: July 31, 2026 ... Extended: December 31,
+// 2026"): each tier is a closing date of the same call. A tier label alone,
+// without the heading, is not enough.
+const TIER_HEADING = /\b(?:deadlines|entry\s+deadlines|submission\s+deadlines|key\s+dates|important\s+dates|fechas\s+l[ií]mite|plazos|scadenze|fristen|dates\s+limites)\b\s*:?/giu;
+const TIER_LABEL = /\s*[•·*\-–]?\s*((?:super\s+|very\s+|ultra\s+)?(?:early[\s-]?bird|early|regular|standard|official|late|extended|final|last|first|second|third)(?:\s+(?:deadline|call|entry|entries|submissions?))?)\s*[:\-–]\s*/iuy;
+
+function tierListDates(text) {
+  const tiers = [];
+  for (const heading of text.matchAll(TIER_HEADING)) {
+    let position = heading.index + heading[0].length;
+    const list = [];
+    for (let count = 0; count < 8; count += 1) {
+      TIER_LABEL.lastIndex = position;
+      const label = TIER_LABEL.exec(text);
+      if (!label) break;
+      const dateStart = label.index + label[0].length;
+      // A short window: the date must follow the label directly.
+      const hit = readDate(text.slice(dateStart, dateStart + 26));
+      if (!hit || hit.match.index > 0) break;
+      const end = dateStart + hit.match[0].length;
+      list.push({ date: hit.date, start: label.index, end, evidence: text.slice(label.index, end).replace(/\s+/g, " ").trim() });
+      position = end;
+    }
+    // The tiers of one list share its position (heading to last tier).
+    for (const tier of list) tiers.push({ ...tier, listStart: heading.index, listEnd: list.at(-1).end });
+  }
+  return tiers;
+}
+
 /**
  * A closing date needs a closing word right next to it: "Deadline: 15 Oct
  * 2026" or "15 Oct 2026 · Late deadline". When a title is given, one of its
@@ -293,6 +323,11 @@ export function extractDeadline(text, { now = Date.now(), title = null } = {}) {
       nearTitle: wanted.some((token) => context.includes(token)),
       evidence,
     });
+  }
+  for (const tier of tierListDates(text)) {
+    const fold = (value) => value.toLowerCase().normalize("NFKD").replace(/\p{M}/gu, "");
+    const context = fold(text.slice(Math.max(0, tier.listStart - 150), tier.listEnd + 50));
+    found.push({ date: tier.date, start: tier.start, nearTitle: wanted.some((token) => context.includes(token)), evidence: tier.evidence });
   }
   if (!found.length) return null;
   // Prefer dates stated near this record's title when there are several.

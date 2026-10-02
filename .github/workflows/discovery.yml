@@ -118,7 +118,7 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           BROWSER_RENDER_ENABLED: "true"
-          AUTO_APPROVE_LIMIT: "15"
+          AUTO_APPROVE_LIMIT: "50"
       - name: Harvest directories for new official sources (no facts copied)
         if: always() && steps.guard.outputs.skip != 'true'
         continue-on-error: true
