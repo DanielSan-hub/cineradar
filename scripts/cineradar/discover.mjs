@@ -53,6 +53,7 @@ import {
   combinedSeriesPage,
   isSeriesSource,
   pageHasPlatformLink,
+  pageHasSubmissionLink,
   platformOf,
   seriesEvidence,
   seriesName,
@@ -640,6 +641,7 @@ try {
   const noSignal = scored.filter((item) =>
     !item.callSignal.pass
     && !pageHasPlatformLink(item.page)
+    && !(isSeriesSource(item.candidate.source) && pageHasSubmissionLink(item.page))
     && item.candidate.provenance.every((entry) => entry.provider === "source_monitor"),
   );
   if (noSignal.length) recordRejection(metrics, "NO_CALL_SIGNAL", noSignal.length);

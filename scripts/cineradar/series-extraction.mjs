@@ -63,6 +63,30 @@ export function pageHasPlatformLink(page) {
   return (page?.linkRecords ?? []).some((link) => festivalPlatformLink(link.url));
 }
 
+// Links to a call's own pages on a festival site ("Submit", "Call for
+// entries", "Rules", "Bases", "Regolamento"): the call is often stated there
+// while the homepage says nothing about it.
+const SUBMISSION_LINK = /\b(?:submit\w*|submissions?|call[\s_-]+for[\s_-]+(?:entries|submissions|films|projects|works|applications)|open[\s_-]+call|entry[\s_-]+form|enter[\s_-]+your[\s_-]+film|how[\s_-]+to[\s_-]+(?:submit|apply|enter)|rules|regulations?|reglamento|bases|convocatoria|inscripci\w*|iscrizion\w*|bando|regolamento|einreich\w*|ausschreibung|r[eè]glement|appel[\s_-]+(?:[àa][\s_-]+)?(?:films|candidatures|projets)|edital|inscri[cç][oõ]es)\b|応募|募集|공모/iu;
+const NOT_SUBMISSION_LINK = /\b(?:winners?|jury|tickets?|press|news|blog|shop|volunteer\w*|sponsor\w*|privacy|cookies?|login|newsletter|accreditation|job\w*)\b/iu;
+
+/** True when a series' own page links a submission page of the same site (or a platform). */
+export function pageHasSubmissionLink(page) {
+  const site = hostOf(page?.finalUrl ?? page?.inputUrl ?? "")?.replace(/^www\./, "");
+  if (!site) return false;
+  return (page?.linkRecords ?? []).some((link) => {
+    const host = hostOf(link.url)?.replace(/^www\./, "");
+    if (!host || (host !== site && !host.endsWith(`.${site}`) && !site.endsWith(`.${host}`))) return Boolean(festivalPlatformLink(link.url));
+    let path = "";
+    try {
+      path = decodeURIComponent(new URL(link.url).pathname);
+    } catch {
+      return false;
+    }
+    const label = `${link.text ?? ""} ${path}`;
+    return SUBMISSION_LINK.test(label) && !NOT_SUBMISSION_LINK.test(label);
+  });
+}
+
 const EXPLICIT_OPEN =/\b(?:submissions?|entries|applications?|call\s+for\s+(?:entries|submissions|films|projects))\s+(?:are\s+|is\s+)?(?:now\s+)?open\b|\bopen\s+for\s+(?:submissions?|entries|applications?)\b|\bnow\s+accepting\s+(?:submissions?|entries|films|applications?)\b|\binscripciones\s+abiertas\b|\bconvocatoria\s+abierta\b|\biscrizioni\s+aperte\b|\binscriptions?\s+(?:sont\s+)?ouvertes?\b|\beinreichung(?:en)?\s+(?:ist|sind)?\s*(?:ge)?öffnet\b|\binscri(?:ç|c)(?:õ|o)es\s+abertas\b/iu;
 const EXPLICIT_CLOSED = /\b(?:submissions?|applications?|entries|call)\s+(?:are\s+|is\s+)?(?:now\s+)?closed\b|\b(?:submissions?|applications?|entries|registrations?)\s+(?:for|to)\s+[^.\n]{1,80}?\s+(?:are|is)\s+(?:now\s+)?closed\b|\bno\s+longer\s+accepting\b|\bconvocatoria\s+cerrada\b|\binscripciones\s+cerradas\b|\biscrizioni\s+chiuse\b|\bbando\s+scaduto\b|\binscriptions?\s+(?:sont\s+)?(?:closes|ferm[ée]es)\b|\bbewerbungsfrist\s+(?:ist\s+)?abgelaufen\b|\binscri(?:ç|c)(?:õ|o)es\s+encerradas\b/iu;
 

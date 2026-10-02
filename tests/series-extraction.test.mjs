@@ -9,6 +9,7 @@ import {
   festivalPlatformLink,
   isSeriesSource,
   pageHasPlatformLink,
+  pageHasSubmissionLink,
   seriesCategory,
   seriesEvidence,
   seriesName,
@@ -192,4 +193,16 @@ test("past-tense dates and label-only names are not used", async () => {
   assert.equal(inferYearlessDeadline("Edition 2027. The call closes on April 13.", { now: NOW }).deadline, "2027-04-13");
   assert.equal(seriesName({ name: "Submissions FAQ" }, page({ html: '<meta property="og:site_name" content="Nashville Film Festival">' })), "Nashville Film Festival");
   assert.equal(seriesName({ name: "Rules of the Game Film Fest" }, page()), "Rules of the Game Film Fest");
+});
+
+test("a series homepage that links its own Submit/Rules page passes the call gate", () => {
+  const page = (links) => ({ finalUrl: "https://www.kinofest.example.org/", linkRecords: links });
+  assert.equal(pageHasSubmissionLink(page([{ url: "https://www.kinofest.example.org/submissions/", text: "Submissions" }])), true);
+  assert.equal(pageHasSubmissionLink(page([{ url: "https://kinofest.example.org/reglamento", text: "Bases" }])), true);
+  assert.equal(pageHasSubmissionLink(page([{ url: "https://filmfreeway.com/Kinofest", text: "Submit" }])), true);
+  // Other sites, news, tickets and volunteers are not the call's pages.
+  assert.equal(pageHasSubmissionLink(page([{ url: "https://other.example.com/submit", text: "Submit" }])), false);
+  assert.equal(pageHasSubmissionLink(page([{ url: "https://kinofest.example.org/news/submissions-closed", text: "News" }])), false);
+  assert.equal(pageHasSubmissionLink(page([{ url: "https://kinofest.example.org/volunteer", text: "Apply to volunteer" }])), false);
+  assert.equal(pageHasSubmissionLink(page([{ url: "https://kinofest.example.org/programme", text: "Programme" }])), false);
 });

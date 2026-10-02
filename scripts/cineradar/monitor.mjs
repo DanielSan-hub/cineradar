@@ -36,7 +36,7 @@ import {
   selectSourceOpportunityLinks,
 } from "./web-validation.mjs";
 import { fetchPageOrRender } from "./browser-render.mjs";
-import { pageHasPlatformLink } from "./series-extraction.mjs";
+import { isSeriesSource, pageHasPlatformLink, pageHasSubmissionLink } from "./series-extraction.mjs";
 
 let run = null;
 const metrics = createRunMetrics("monitor");
@@ -61,8 +61,10 @@ async function gateCallSignal(page, observation, source) {
   const lenient = isAiSource(source) || isAiFilmText(page.text ?? "");
   const signal = scoreCallSignal(page.text ?? "", { lenient });
   // A festival site's "Submit on FilmFreeway/Festhome" link is a call signal
-  // too: series-anchored extraction maps the call through that link.
-  if (signal.pass || pageHasPlatformLink(page)) {
+  // too: series-anchored extraction maps the call through that link. On a
+  // known series' own site, a link to its Submit/Rules page is enough: the
+  // extraction reads the call there.
+  if (signal.pass || pageHasPlatformLink(page) || (isSeriesSource(source) && pageHasSubmissionLink(page))) {
     gate.passed += 1;
     return;
   }
