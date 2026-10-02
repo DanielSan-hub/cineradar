@@ -271,7 +271,7 @@ try {
   // The oldest-first window alone never reaches new high-priority sources
   // while thousands are overdue, so priority sources are fetched separately.
   // PostgREST returns at most 1,000 rows per request: page through the window.
-  const window = Math.min(3000, config.sourceRefreshLimit + 500);
+  const window = Math.min(7000, config.sourceRefreshLimit + 500);
   const overduePages = await Promise.all(
     Array.from({ length: Math.ceil(window / 1000) }, (_, page) => supabase(
       `sources?select=*&enabled=eq.true&or=(next_check_at.is.null,next_check_at.lte.${dueAt})&order=next_check_at.asc.nullsfirst,id.asc&limit=1000&offset=${page * 1000}`,
