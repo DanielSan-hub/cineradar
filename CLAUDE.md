@@ -126,6 +126,15 @@ catalogue 23 -> 43 (first CI run with the hunt: 113 inserted, 55 deterministic,
 scanned clean) was blocked by the local permission classifier: the owner must
 switch visibility in GitHub settings; then monitor frequency and LLM calls per
 run can be raised (the minutes test assumes the private 2,000 cap).
+Update 2026-10-02 (evening): the GitHub repo is PUBLIC (free runners); runs are
+sized by free provider quotas: monitor 2,500 sources/run (paged reads), discovery
+130 LLM calls within a 15-minute LLM budget, hunt 150, harvest 25 directories.
+The GROQ_API_KEY Actions secret exists but Groq answers 401 invalid_api_key
+(probably an xAI "Grok" key, not a Groq key): Groq stays unused (releases cost 0).
+Auto-review now rejects aggregator pages (directory sources with an aggregator
+name or 3+ unrelated organizers), closed titles, and watches not-yet-open calls;
+names lose website chrome/entities/announcements; the daily re-check no longer
+flips approvals on film relevance. Public catalogue: 59.
 
 Owner approval 2026-09-28: Exa has its own budget pool of at most 9/month
 (ledger units; USD is counted 1:1 so real spend stays <= USD 9). All other
