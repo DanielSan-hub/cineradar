@@ -247,10 +247,17 @@ try {
   const dueAt = encodeURIComponent(new Date().toISOString());
   // The oldest-first window alone never reaches new high-priority sources
   // while thousands are overdue, so priority sources are fetched separately.
-  const [overdue, priorityDue] = await Promise.all([
-    supabase(`sources?select=*&enabled=eq.true&or=(next_check_at.is.null,next_check_at.lte.${dueAt})&order=next_check_at.asc.nullsfirst&limit=2000`),
-    supabase(`sources?select=*&enabled=eq.true&priority=lt.3&or=(next_check_at.is.null,next_check_at.lte.${dueAt})&order=priority.asc,next_check_at.asc.nullsfirst&limit=1000`),
-  ]);
+  // PostgREST returns at most 1,000 rows per request: page through the window.
+  const window = Math.min(3000, config.sourceRefreshLimit + 500);
+  const overduePages = await Promise.all(
+    Array.from({ length: Math.ceil(window / 1000) }, (_, page) => supabase(
+      `sources?select=*&enabled=eq.true&or=(next_check_at.is.null,next_check_at.lte.${dueAt})&order=next_check_at.asc.nullsfirst,id.asc&limit=1000&offset=${page * 1000}`,
+    )),
+  );
+  const overdue = overduePages.flat();
+  const priorityDue = await supabase(
+    `sources?select=*&enabled=eq.true&priority=lt.3&or=(next_check_at.is.null,next_check_at.lte.${dueAt})&order=priority.asc,next_check_at.asc.nullsfirst&limit=1000`,
+  );
   const allSources = [...new Map([...overdue, ...priorityDue].map((source) => [source.id, source])).values()];
   const sources = selectDueSources(allSources, {
     now: new Date(),

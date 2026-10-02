@@ -51,9 +51,10 @@ export const config = {
   llmTimeoutMs: boundedNumber("LLM_TIMEOUT_MS", 45000, { min: 5000, max: 60000, integer: true }),
   monitorLinkLimit: boundedNumber("MONITOR_LINK_LIMIT", 2, { min: 0, max: 10, integer: true }),
   llmConcurrency: boundedNumber("LLM_CONCURRENCY", 2, { min: 1, max: 4, integer: true }),
+  discoveryLlmTimeBudgetSeconds: boundedNumber("DISCOVERY_LLM_TIME_BUDGET_SECONDS", 900, { min: 60, max: 3600, integer: true }),
   urlValidationConcurrency: boundedNumber("URL_VALIDATION_CONCURRENCY", 4, { min: 1, max: 8, integer: true }),
-  sourceRefreshLimit: boundedNumber("SOURCE_REFRESH_LIMIT", 40, { min: 1, max: 1000, integer: true }),
-  monitorConcurrency: boundedNumber("MONITOR_CONCURRENCY", 6, { min: 1, max: 12, integer: true }),
+  sourceRefreshLimit: boundedNumber("SOURCE_REFRESH_LIMIT", 40, { min: 1, max: 3000, integer: true }),
+  monitorConcurrency: boundedNumber("MONITOR_CONCURRENCY", 6, { min: 1, max: 16, integer: true }),
   // Stop starting new sources before the job timeout; the rest stay due.
   monitorTimeBudgetSeconds: boundedNumber("MONITOR_TIME_BUDGET_SECONDS", 540, { min: 30, max: 3600, integer: true }),
   revalidationLimit: boundedNumber("REVALIDATION_LIMIT", 200, { min: 1, max: 500, integer: true }),

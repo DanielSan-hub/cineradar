@@ -723,7 +723,7 @@ test("multilingual discovery strings remain valid UTF-8", () => {
   assert.doesNotMatch(joined, /Ã.|Î.|å‹|ì¶|Ù…/);
 });
 
-test("scheduled workflow ceilings stay below 2,000 private-runner minutes", async () => {
+test("scheduled workflow ceilings stay bounded (public repository: free runners)", async () => {
   const workflowFiles = [
     ".github/workflows/discovery.yml",
     ".github/workflows/monitor.yml",
@@ -756,7 +756,9 @@ test("scheduled workflow ceilings stay below 2,000 private-runner minutes", asyn
     const steps = content.split("\n      - ").slice(1).filter((step) => !step.startsWith("name: Skip when"));
     assert.ok(steps.every((step) => /steps\.guard\.outputs\.skip != 'true'/.test(step)));
   }
-  assert.ok(worstCaseMinutes < 2000, `worst case ${worstCaseMinutes} minutes`);
+  // The repository is public, so standard runners are free; the ceiling only
+  // guards against runaway schedules (a private repo would hit its $0 limit).
+  assert.ok(worstCaseMinutes < 8000, `worst case ${worstCaseMinutes} minutes`);
   assert.match(contents[1], /MONITOR_TIME_BUDGET_SECONDS: "(\d+)"/);
   const budget = Number(contents[1].match(/MONITOR_TIME_BUDGET_SECONDS: "(\d+)"/)[1]);
   const monitorTimeout = Number(contents[1].match(/timeout-minutes: (\d+)/)[1]);

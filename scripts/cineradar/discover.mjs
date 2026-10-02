@@ -561,8 +561,15 @@ try {
       || right.callSignal.score - left.callSignal.score);
 
   let claimedLlmCalls = 0;
+  // Groq's free tier is paced (a few calls a minute): stop starting new
+  // extractions after the time budget so the run ends well inside its job.
+  const llmDeadline = Date.now() + config.discoveryLlmTimeBudgetSeconds * 1000;
   const claimLlmCall = () => {
     if (claimedLlmCalls >= limits.llmLimit) return false;
+    if (Date.now() > llmDeadline) {
+      incrementMetric(metrics, "llm_time_budget_stops");
+      return false;
+    }
     claimedLlmCalls += 1;
     return true;
   };
