@@ -28,6 +28,20 @@ function enabled(name, fallback = false) {
   );
 }
 
+/**
+ * Secrets pasted into a settings page often carry stray formatting: spaces or
+ * newlines, quotes, the variable name ("GROQ_API_KEY=...") or "Bearer ".
+ */
+export function cleanSecret(value) {
+  if (typeof value !== "string") return value;
+  const cleaned = value.trim()
+    .replace(/^[A-Z][A-Z0-9_]*\s*=\s*/, "")
+    .replace(/^bearer\s+/i, "")
+    .replace(/^["'`]+|["'`]+$/g, "")
+    .trim();
+  return cleaned || undefined;
+}
+
 export const config = {
   exaApiKey: process.env.EXA_API_KEY,
   ingestUrl: process.env.CINERADAR_INGEST_URL,
@@ -38,7 +52,7 @@ export const config = {
   cloudflareApiToken: process.env.CLOUDFLARE_API_TOKEN,
   cloudflareModel:
     process.env.CLOUDFLARE_AI_MODEL ?? "@cf/meta/llama-3.1-8b-instruct-fp8-fast",
-  groqApiKey: process.env.GROQ_API_KEY,
+  groqApiKey: cleanSecret(process.env.GROQ_API_KEY),
   groqModel: process.env.GROQ_MODEL ?? "openai/gpt-oss-20b",
   groqFallbackEnabled: enabled("GROQ_FALLBACK_ENABLED"),
   // Exa is a rotating gap/source finder, not the primary discovery engine.

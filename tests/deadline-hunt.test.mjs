@@ -199,3 +199,11 @@ test("a title or page that says the call is closed is never published", async ()
   assert.equal(scoreCallSignal("Submissions for the 2027 Episodic Lab and Intensive are now closed.").closed, true);
   assert.equal(autoReviewDecision({ ...pending, title: "Closed Circuit Film Festival 2027" }, { now: NOW, page: page({ filmContext: true }) }).decision, "approve");
 });
+
+test("pasted secrets are cleaned of quotes, names and whitespace", async () => {
+  const { cleanSecret } = await import("../scripts/cineradar/config.mjs");
+  for (const value of ["  gsk_abc\n", "\"gsk_abc\"", "GROQ_API_KEY=gsk_abc", "Bearer gsk_abc", "GROQ_API_KEY = \"gsk_abc\""]) {
+    assert.equal(cleanSecret(value), "gsk_abc");
+  }
+  assert.equal(cleanSecret("   "), undefined);
+});
