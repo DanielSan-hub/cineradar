@@ -246,7 +246,10 @@ async function cloudflare(messages, context) {
 // shorter than Cloudflare's; a 429 is refused before inference (no charge).
 const GROQ_TEXT_CHARACTERS = 14_000;
 const GROQ_MAX_OUTPUT_TOKENS = 2000;
-const GROQ_MAX_WAIT_MS = 20_000;
+// The free tier allows a few thousand tokens a minute: wait out a 429 when
+// the requested pause is short, and send Groq calls one at a time.
+const GROQ_MAX_WAIT_MS = 65_000;
+let groqQueue = Promise.resolve();
 
 /** Seconds to wait from a Groq 429 (retry-after header or "try again in 7.5s"). */
 export function groqRetryAfterMs(headers, body) {
@@ -304,7 +307,13 @@ async function resolveGroqModel() {
   return false;
 }
 
-async function groq(messages, context) {
+function groq(messages, context) {
+  const call = groqQueue.then(() => groqCall(messages, context));
+  groqQueue = call.catch(() => {});
+  return call;
+}
+
+async function groqCall(messages, context) {
   if (!config.groqApiKey || groqUnavailable) return null;
   // One model per call, even if another call switches the run's model meanwhile.
   const model = groqModel;
@@ -373,7 +382,7 @@ async function groq(messages, context) {
       body = await response.json().catch(() => null);
       if (response.status !== 429) break;
       const waitMs = groqRetryAfterMs(response.headers, body);
-      if (attempt < 3 && waitMs !== null && waitMs <= GROQ_MAX_WAIT_MS) {
+      if (attempt < 6 && waitMs !== null && waitMs <= GROQ_MAX_WAIT_MS) {
         await sleep(waitMs + 250);
         continue;
       }
@@ -389,7 +398,7 @@ async function groq(messages, context) {
       || /model_(?:not_found|decommissioned)|does not exist|decommissioned/i.test(String(body?.error?.code ?? body?.error?.message ?? ""));
     if (modelGone && (model !== groqModel || !groqModelResolved)) {
       await release(response.status, "GROQ_MODEL_UNAVAILABLE");
-      if (model !== groqModel || await resolveGroqModel()) return groq(messages, context);
+      if (model !== groqModel || await resolveGroqModel()) return groqCall(messages, context);
     }
     const errorText = `${body?.error?.code ?? ""} ${body?.error?.message ?? ""}`;
     if (response.status === 400 && !/api[_ ]key|model|permission|organization|billing/i.test(errorText)) {
