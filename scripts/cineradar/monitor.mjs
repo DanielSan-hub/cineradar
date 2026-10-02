@@ -36,6 +36,7 @@ import {
   selectSourceOpportunityLinks,
 } from "./web-validation.mjs";
 import { fetchPageOrRender } from "./browser-render.mjs";
+import { pageHasPlatformLink } from "./series-extraction.mjs";
 
 let run = null;
 const metrics = createRunMetrics("monitor");
@@ -59,7 +60,9 @@ async function gateCallSignal(page, observation, source) {
   if (page.notModified || observation.alreadyProcessed) return;
   const lenient = isAiSource(source) || isAiFilmText(page.text ?? "");
   const signal = scoreCallSignal(page.text ?? "", { lenient });
-  if (signal.pass) {
+  // A festival site's "Submit on FilmFreeway/Festhome" link is a call signal
+  // too: series-anchored extraction maps the call through that link.
+  if (signal.pass || pageHasPlatformLink(page)) {
     gate.passed += 1;
     return;
   }
@@ -156,7 +159,7 @@ async function fetchObserved(url, source, existing, { forceBody = false } = {}) 
   const page = await fetchPageOrRender(url, useConditional ? {
     etag: existing.etag,
     lastModified: existing.last_modified,
-  } : {}, { allowRender: isAiSource(source) || Number(source.priority ?? 3) < 3, runId: run?.id ?? null });
+  } : {}, { allowRender: true, runId: run?.id ?? null });
   if (page.rendered) incrementMetric(metrics, "rendered");
   incrementMetric(metrics, "fetched");
   const observation = page.notModified
@@ -166,6 +169,24 @@ async function fetchObserved(url, source, existing, { forceBody = false } = {}) 
   else incrementMetric(metrics, "unchanged");
   await gateCallSignal(page, observation, source);
   return { page, observation };
+}
+
+/** A registered deep link that moved (404/410) falls back to the site's home page. */
+async function fetchSourcePage(requestUrl, source, existing, options) {
+  try {
+    return await fetchObserved(requestUrl, source, existing, options);
+  } catch (error) {
+    let origin = null;
+    try {
+      const parsed = new URL(requestUrl);
+      origin = parsed.pathname !== "/" ? `${parsed.origin}/` : null;
+    } catch {
+      origin = null;
+    }
+    if (!origin || !["HTTP_404", "HTTP_410"].includes(error.code) || !(await robotsAllowed(origin)).allowed) throw error;
+    incrementMetric(metrics, "moved_page_fallbacks");
+    return fetchObserved(origin, source, null, options);
+  }
 }
 
 async function observeDiscoveredUrls(source, links, checkedAt) {
@@ -308,7 +329,7 @@ try {
     try {
       // Link-window adapters need the body to advance through different child
       // windows even when the directory hash itself is unchanged.
-      const parent = await fetchObserved(
+      const parent = await fetchSourcePage(
         requestUrl,
         source,
         initialCache.get(sourceUrl) ?? null,

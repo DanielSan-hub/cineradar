@@ -163,19 +163,23 @@ export function normalizeDeadline(value, { now = new Date() } = {}) {
   return parsed.toISOString();
 }
 
-function deadlineMatchesEvidence(deadline, rawValue, quote) {
+function deadlineMatchesEvidence(deadline, rawValue, quote, { yearInferred = false } = {}) {
   if (!deadline || !quote) return false;
   const evidence = cleanText(quote, 500).toLocaleLowerCase();
   const raw = cleanText(String(rawValue ?? ""), 100).toLocaleLowerCase();
   const describesOpening = /\b(?:submissions?|applications?|entries|inscripciones|inscriç(?:ão|ões)|candidatures)\s+(?:open|start|abren|abertas?)|\bopening\b|\bsubmission start/i.test(evidence);
-  const describesClosing = /\bdeadline\b|\bclose[sd]?\b|\bdue\b|\bfinal\b|\bsubmit by\b|\bapply by\b|fecha límite|cierre|prazo|encerramento|date limite|bewerbungsfrist|موعد نهائي/i.test(evidence);
+  const describesClosing = /\bdeadline\b|\bclose[sd]?\b|\bdue\b|\bfinal\b|\bsubmit by\b|\bapply by\b|\buntil\b|\btill\b|fecha límite|cierre|hasta|prazo|encerramento|date limite|bewerbungsfrist|موعد نهائي/i.test(evidence);
   if (describesOpening && !describesClosing) return false;
   if (raw && evidence.includes(raw)) return true;
   const date = new Date(deadline);
   const year = String(date.getUTCFullYear());
   const day = String(date.getUTCDate());
-  if (!new RegExp(`\\b${year}\\b`).test(evidence)) return false;
-  if (!new RegExp(`\\b0?${day}\\b`).test(evidence)) return false;
+  // A day and month quoted without a year: only from the year-inference rule,
+  // which already required that year to be printed on the page.
+  if (!yearInferred && !new RegExp(`\\b${year}\\b`).test(evidence)) return false;
+  // "6", "06" and ordinals ("6th", "1st", "1er", "1º") all name the day.
+  if (!new RegExp(`\\b0?${day}(?:st|nd|rd|th|er|º|°|\\.)?\\b`).test(evidence)
+    && !new RegExp(`\\b0?${day}(?:st|nd|rd|th|er|º|°)`).test(evidence)) return false;
   const monthNames = [
     "january", "february", "march", "april", "may", "june",
     "july", "august", "september", "october", "november", "december",
@@ -322,7 +326,8 @@ export function normalizeOpportunity(raw, context) {
   let deadline = requestedDeadlineStatus === "rolling" ? null : normalizeDeadline(raw.deadline);
   let deadlineStatus = requestedDeadlineStatus;
   if (raw.deadline && !deadline) warnings.push("INVALID_DEADLINE");
-  if (deadline && (!groundedDeadline || !deadlineMatchesEvidence(deadline, raw.deadline, deadlineEvidence))) {
+  const yearInferred = requestedDeadlineStatus === "estimated" && raw.series_evidence?.deadline_method === "year-inferred";
+  if (deadline && (!groundedDeadline || !deadlineMatchesEvidence(deadline, raw.deadline, deadlineEvidence, { yearInferred }))) {
     deadline = null;
     deadlineStatus = "unknown";
     warnings.push("UNGROUNDED_DEADLINE");
@@ -438,6 +443,12 @@ function validUrlStatus(validation) {
   return validation && ["verified", "redirected"].includes(validation.status);
 }
 
+// A submission link to a host that refuses automation (FilmFreeway) is kept
+// when the official page itself carries it: it is grounded, just never opened.
+function blockedButGrounded(validation) {
+  return validation?.status === "unchecked" && validation?.reason === "HOST_BLOCKS_AUTOMATION";
+}
+
 export function applyUrlValidations(record, validations) {
   const source = validations.source;
   const official = validations.official ?? null;
@@ -446,7 +457,9 @@ export function applyUrlValidations(record, validations) {
     ...record,
     source_url: validUrlStatus(source) ? source.final_url : record.source_url,
     official_url: validUrlStatus(official) ? official.final_url : null,
-    application_url: validUrlStatus(application) ? application.final_url : null,
+    application_url: validUrlStatus(application)
+      ? application.final_url
+      : blockedButGrounded(application) ? record.application_url : null,
     source_url_status: source?.status ?? "unchecked",
     source_url_http_status: source?.http_status ?? null,
     source_url_final: source?.final_url ?? null,

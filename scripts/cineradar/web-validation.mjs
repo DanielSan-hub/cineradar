@@ -1,5 +1,33 @@
 import { isAiSource } from "./call-signal.mjs";
 import { config } from "./config.mjs";
+import { BLOCKED_HOSTS } from "./registry-seeds.mjs";
+
+/**
+ * Hosts that refuse automated access (FilmFreeway's bot challenge). They are
+ * never requested, not even to validate a link or to follow a redirect; a
+ * link to them found on an official page is kept as "unchecked".
+ */
+export function isAutomationBlockedUrl(url) {
+  try {
+    const host = new URL(String(url)).hostname.toLowerCase().replace(/^www\./, "");
+    return BLOCKED_HOSTS.some((blocked) => host === blocked || host.endsWith(`.${blocked}`));
+  } catch {
+    return false;
+  }
+}
+
+function blockedResult(inputUrl, current, checkedAt) {
+  return {
+    input_url: inputUrl ?? null,
+    final_url: current,
+    status: "unchecked",
+    http_status: null,
+    checked_at: checkedAt,
+    redirect_chain: [],
+    reason: "HOST_BLOCKS_AUTOMATION",
+    ok: false,
+  };
+}
 
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 const TRACKING_PARAMS = new Set([
@@ -250,6 +278,9 @@ async function requestFollowingRedirects(
   const redirectChain = [];
   try {
     for (let hop = 0; hop <= 6; hop += 1) {
+      if (isAutomationBlockedUrl(current)) {
+        return { ...blockedResult(initial, current, checkedAt), redirect_chain: redirectChain };
+      }
       const response = await fetchImpl(current, {
         method: "GET",
         redirect: "manual",
@@ -304,11 +335,22 @@ async function requestFollowingRedirects(
       ...urlFailure(initial, checkedAt, reason, null, current),
       redirect_chain: redirectChain,
       error: String(error?.message ?? error).slice(0, 300),
+      error_code: String(error?.cause?.code ?? error?.code ?? ""),
       ok: false,
     };
   } finally {
     clearTimeout(timer);
   }
+}
+
+// Broken HTTPS set-ups (expired or mismatched certificates, missing
+// intermediates) on small festival sites: the public page is read over HTTP.
+const TLS_ERROR = /CERT|TLS|SSL|UNABLE_TO_VERIFY|SELF_SIGNED|DEPTH_ZERO/i;
+
+export function httpFallbackUrl(url, result) {
+  if (!/^https:/i.test(String(url)) || result?.reason !== "FETCH_FAILED") return null;
+  if (!TLS_ERROR.test(`${result.error_code ?? ""} ${result.error ?? ""}`)) return null;
+  return String(url).replace(/^https:/i, "http:");
 }
 
 async function requestWithRetries(inputUrl, options = {}) {
@@ -317,6 +359,11 @@ async function requestWithRetries(inputUrl, options = {}) {
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     result = await requestFollowingRedirects(inputUrl, options);
     if (result.ok) return result;
+    const fallback = httpFallbackUrl(inputUrl, result);
+    if (fallback) {
+      const plain = await requestFollowingRedirects(fallback, options);
+      return plain.ok ? { ...plain, tls_fallback: true } : result;
+    }
     const transientHttp = Number(result.http_status) >= 500;
     const transientNetwork = ["FETCH_FAILED", "FETCH_TIMEOUT"].includes(result.reason);
     if (attempt === attempts || (!transientHttp && !transientNetwork)) return result;
@@ -423,8 +470,19 @@ export async function validateUrl(
   if (evidence && !isUrlGrounded(canonical, evidence)) {
     return urlFailure(canonical, checkedAt, "UNGROUNDED_URL");
   }
+  if (isAutomationBlockedUrl(canonical)) {
+    const blocked = blockedResult(canonical, canonical, checkedAt);
+    delete blocked.ok;
+    return blocked;
+  }
   const result = await requestWithRetries(canonical, { fetchImpl, timeoutMs });
   if (!result.ok) {
+    if (result.reason === "HOST_BLOCKS_AUTOMATION") {
+      const blocked = { ...result };
+      delete blocked.ok;
+      delete blocked.response;
+      return blocked;
+    }
     const status = result.http_status;
     const reason = status === 404 ? "HTTP_404" : status === 410 ? "HTTP_410" : status >= 500 ? "HTTP_5XX" : result.reason ?? `HTTP_${status}`;
     return { ...result, status: "unreachable", reason };

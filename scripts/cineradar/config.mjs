@@ -60,11 +60,14 @@ export const config = {
   discoveryResultLimit: boundedNumber("DISCOVERY_RESULT_LIMIT", 5, { min: 1, max: 10, integer: true }),
   maxLlmCalls: boundedNumber("MAX_LLM_CALLS_PER_RUN", 24, { min: 0, max: 200, integer: true }),
   // Pages reaching discovery already passed the free call-signal gate.
-  freeProcessingLimit: boundedNumber("FREE_PROCESSING_LIMIT", 40, { min: 1, max: 400, integer: true }),
+  freeProcessingLimit: boundedNumber("FREE_PROCESSING_LIMIT", 40, { min: 1, max: 3000, integer: true }),
   timeoutMs: boundedNumber("HTTP_TIMEOUT_MS", 12000, { min: 1000, max: 30000, integer: true }),
   llmTimeoutMs: boundedNumber("LLM_TIMEOUT_MS", 45000, { min: 5000, max: 60000, integer: true }),
   monitorLinkLimit: boundedNumber("MONITOR_LINK_LIMIT", 2, { min: 0, max: 10, integer: true }),
   llmConcurrency: boundedNumber("LLM_CONCURRENCY", 2, { min: 1, max: 4, integer: true }),
+  // Series pages are read with rules (HTTP only): more of them run at once.
+  seriesConcurrency: boundedNumber("SERIES_CONCURRENCY", 8, { min: 1, max: 24, integer: true }),
+  pageFetchConcurrency: boundedNumber("PAGE_FETCH_CONCURRENCY", 8, { min: 1, max: 24, integer: true }),
   discoveryLlmTimeBudgetSeconds: boundedNumber("DISCOVERY_LLM_TIME_BUDGET_SECONDS", 900, { min: 60, max: 3600, integer: true }),
   urlValidationConcurrency: boundedNumber("URL_VALIDATION_CONCURRENCY", 4, { min: 1, max: 8, integer: true }),
   sourceRefreshLimit: boundedNumber("SOURCE_REFRESH_LIMIT", 40, { min: 1, max: 3000, integer: true }),

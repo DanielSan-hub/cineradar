@@ -12,7 +12,7 @@ concurrency:
 jobs:
   discover:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 50
     permissions:
       contents: read
       actions: read
@@ -53,11 +53,15 @@ jobs:
           GROQ_FALLBACK_ENABLED: "true"
           GROQ_MODEL: "meta-llama/llama-4-scout-17b-16e-instruct"
           BROWSER_RENDER_ENABLED: "true"
-          DISCOVERY_QUERY_LIMIT: "6"
+          # Zero spend (owner, 2026-10-03): no paid search. Discovery reads the
+          # registry, directories and platforms only.
+          DISCOVERY_QUERY_LIMIT: "0"
           DISCOVERY_RESULT_LIMIT: "5"
           MAX_LLM_CALLS_PER_RUN: "130"
           DISCOVERY_LLM_TIME_BUDGET_SECONDS: "720"
-          FREE_PROCESSING_LIMIT: "320"
+          FREE_PROCESSING_LIMIT: "1500"
+          PAGE_FETCH_CONCURRENCY: "12"
+          SERIES_CONCURRENCY: "10"
           HTTP_TIMEOUT_MS: "12000"
           LLM_TIMEOUT_MS: "45000"
           LLM_CONCURRENCY: "3"

@@ -65,11 +65,17 @@ export function huntLinks(linkRecords, { pageUrl, limit = 3 } = {}) {
     .slice(0, limit);
 }
 
-const MONTH_PATTERN = [...MONTH_NUMBERS.keys()].sort((a, b) => b.length - a.length).join("|");
+// Dates for other kinds of calls on festival sites.
+export const NOT_A_SUBMISSION = /\b(?:volunteers?|volunteering|jur(?:y|ies)|jurors?|tickets?|ticketing|accreditations?|press\s+pass|internships?|interns?|jobs?|vacanc(?:y|ies)|hiring|careers?|sponsors?|sponsorship|vendors?|exhibitors?|stalls?|workshops?|masterclass(?:es)?|screenings?\s+schedule|volontari|voluntarios|bénévoles|freiwillige)\b/iu;
+
+const MONTH_PATTERN =[...MONTH_NUMBERS.keys()].sort((a, b) => b.length - a.length).join("|");
 // Words that put a following date in charge of submissions.
 // Bare "by"/"before"/"ends" are not enough ("should be realized by April 2",
 // "promo ends Oct 15"): the words must name a submission deadline.
-const CLOSING_CONTEXT = /(?:deadline|due\s+date|close[sd]?|closing|until|till|submission\s+(?:window|period)|(?:submit|apply|entries|applications?|submissions?)\s+(?:by|before|through|until|close)|received\s+by|scadenza|entro\s+il|fino\s+al|hasta\s+el|plazo|cierre|date\s+limite|jusqu'au|bis\s+zum|einsendeschluss|bewerbungsschluss)\b[^.\n]{0,40}$/iu;
+// "closed on April 13" describes an edition that has ended: only present or
+// future wording ("closes", "deadline", "until") announces the next date.
+const CLOSING_CONTEXT = /(?:deadline|due\s+date|closes?|closing|until|till|submission\s+(?:window|period)|(?:submit|apply|entries|applications?|submissions?)\s+(?:by|before|through|until|close)|received\s+by|scadenza|entro\s+il|fino\s+al|hasta\s+el|plazo|cierre|date\s+limite|jusqu'au|bis\s+zum|einsendeschluss|bewerbungsschluss)\b[^.\n]{0,40}$/iu;
+const PAST_TENSE = /\b(?:closed|ended|was|were|took\s+place|held)\b[^.\n]{0,30}$/iu;
 const YEARLESS = new RegExp(
   `\\b(?:(${MONTH_PATTERN})\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?|(\\d{1,2})(?:st|nd|rd|th|er|º|°)?\\s+(?:of\\s+|de\\s+|del\\s+)?(${MONTH_PATTERN})\\.?)\\b(?!,?\\s*\\d{4})(?![/.-]\\d)`,
   "giu",
@@ -100,7 +106,7 @@ export function inferYearlessDeadline(text, { now = Date.now(), maxDaysAhead = 2
   const found = [];
   for (const match of body.matchAll(YEARLESS)) {
     const before = body.slice(Math.max(0, match.index - 60), match.index);
-    if (!CLOSING_CONTEXT.test(before)) continue;
+    if (!CLOSING_CONTEXT.test(before) || PAST_TENSE.test(before)) continue;
     let date = monthDay(match);
     let end = match.index + match[0].length;
     // "Mar 25 – April 8": the window closes on the second date.
@@ -124,6 +130,8 @@ export function inferYearlessDeadline(text, { now = Date.now(), maxDaysAhead = 2
     if ((candidate - now) / DAY > maxDaysAhead) continue;
     if (!new RegExp(`\\b${year}\\b`).test(body)) continue;
     const evidence = body.slice(Math.max(0, match.index - 40), end).replace(/\s+/g, " ").trim().slice(0, 180);
+    // "Call for volunteers… apply by October 11" is not a film submission date.
+    if (NOT_A_SUBMISSION.test(body.slice(Math.max(0, match.index - 90), end))) continue;
     if (!accept(evidence)) continue;
     found.push({
       deadline: check.toISOString().slice(0, 10),

@@ -46,10 +46,81 @@ import {
   supabase,
 } from "./supabase.mjs";
 import { fetchPageOrRender } from "./browser-render.mjs";
+import { huntLinks } from "./deadline-hunt.mjs";
+import { createRobotsChecker } from "./robots.mjs";
+import {
+  combinedSeriesPage,
+  isSeriesSource,
+  pageHasPlatformLink,
+  seriesEvidence,
+  seriesName,
+  seriesRawItem,
+} from "./series-extraction.mjs";
 import { canonicalizeUrl } from "./web-validation.mjs";
 
 let run = null;
 const metrics = createRunMetrics("discovery");
+const robotsAllowed = createRobotsChecker({ userAgent: "CineRadarBot/2.0 (+https://cineradar.danielmaker.chatgpt.site)" });
+
+/** The call's own Submit/Rules/Dates subpages of a series page (robots respected). */
+async function readSeriesSubpages(home, { allowRender = false } = {}) {
+  const pages = [];
+  for (const link of huntLinks(home.linkRecords, { pageUrl: home.finalUrl, limit: 3 })) {
+    if (!(await robotsAllowed(link.url)).allowed) continue;
+    try {
+      pages.push(await fetchPageOrRender(link.url, {}, { allowRender, runId: run.id }));
+      incrementMetric(metrics, "series_subpages");
+    } catch {
+      // A missing subpage only means less evidence.
+    }
+  }
+  return pages;
+}
+
+/**
+ * Series-anchored extraction for one page: rules first; the LLM is asked only
+ * for AI or high-priority sources where rules found nothing.
+ */
+async function processSeriesItem(item) {
+  const source = item.candidate.source;
+  const home = item.page;
+  const name = seriesName(source, home) ?? item.candidate.title;
+  try {
+    const quick = seriesEvidence([home], { title: name });
+    // Subpages are opened unless the page itself already states the deadline.
+    const subpages = quick.deadline ? [] : await readSeriesSubpages(home, { allowRender: item.ai });
+    const pages = [...subpages, home];
+    const evidence = subpages.length ? seriesEvidence(pages, { title: name }) : quick;
+    const raw = seriesRawItem({ source, home, pages, evidence });
+    if (!raw) {
+      if (item.ai || Number(source?.priority ?? 3) <= 2) return { needsLlm: true, item };
+      incrementMetric(metrics, "series_no_evidence");
+      return { result: { ...item, records: [], processed: true } };
+    }
+    const records = await processFetchedPage({
+      page: combinedSeriesPage(home, subpages),
+      title: name,
+      sourceType: "official",
+      metrics,
+      runId: run.id,
+      operation: "series_extract",
+      contentHash: item.contentHash,
+      presetItems: [raw],
+    });
+    return {
+      result: {
+        ...item,
+        records: records.map((record) => withProvenance(record, item.candidate.provenance)),
+        processed: true,
+      },
+    };
+  } catch (error) {
+    await deferPageProcessing(item.page, error.code ?? "EXTRACTION_FAILED").catch(() => {});
+    if (!error.metricsRecorded) recordRejection(metrics, error.code ?? "EXTRACTION_FAILED");
+    console.warn(`Series extraction skipped ${item.page.finalUrl}: ${error.message}`);
+    return { result: { ...item, records: [], processed: false } };
+  }
+}
 
 async function patchDiscoveryAttempt(id, values) {
   return supabase(`discovery_attempts?id=eq.${encodeURIComponent(id)}`, {
@@ -220,7 +291,7 @@ async function pendingKnownSourceCandidates(limit) {
     );
   const sourceIds = [...new Set(pending.map((row) => row.source_id).filter(Boolean))];
   if (!sourceIds.length) return [];
-  const sources = await selectIn("sources", "id,name,source_type,source_family,priority,opportunity_categories", "id", sourceIds);
+  const sources = await selectIn("sources", "id,name,url,source_type,source_family,priority,opportunity_categories,adapter_config", "id", sourceIds);
   const sourceById = new Map(sources.map((source) => [source.id, source]));
   // AI-focused sources first, then source priority (1 = highest), then oldest:
   // an oldest-first queue left new AI contest pages waiting behind thousands of
@@ -239,6 +310,7 @@ async function pendingKnownSourceCandidates(limit) {
       title: source?.name ?? "Known source",
       sourceType: source?.source_type ?? "official",
       aiSource: isAiSource(source),
+      source: source ?? null,
       provenance: [{
         provider: "source_monitor",
         queryId: null,
@@ -504,7 +576,7 @@ try {
   incrementMetric(metrics, "discovered", candidates.length);
 
   const cache = await fetchUrlCache(candidates.map((candidate) => candidate.url));
-  const observations = (await mapPool(candidates, 8, async (candidate) => {
+  const observations = (await mapPool(candidates, config.pageFetchConcurrency, async (candidate) => {
     const existing = cache.get(candidate.url) ?? null;
     if (existing?.next_retry_at && Date.parse(existing.next_retry_at) > Date.now()) {
       recordRejection(metrics, "URL_RETRY_DEFERRED");
@@ -546,8 +618,10 @@ try {
       const ai = Boolean(item.candidate.aiSource) || isAiFilmText(item.page.text ?? "");
       return { ...item, ai, callSignal: scoreCallSignal(item.page.text ?? "", { lenient: ai }) };
     });
+  // A submission link to a platform is itself a call signal on a series' site.
   const noSignal = scored.filter((item) =>
     !item.callSignal.pass
+    && !pageHasPlatformLink(item.page)
     && item.candidate.provenance.every((entry) => entry.provider === "source_monitor"),
   );
   if (noSignal.length) recordRejection(metrics, "NO_CALL_SIGNAL", noSignal.length);
@@ -573,8 +647,16 @@ try {
     claimedLlmCalls += 1;
     return true;
   };
-  const processedPages = await mapPool(
-    fetched,
+  // Series pages (a known organizer's own site) are read with rules first:
+  // deadline, submission link, explicit open/closed. No LLM is spent on them
+  // unless rules find nothing on an AI or high-priority source.
+  const isSeriesItem = (item) => isSeriesSource(item.candidate.source)
+    && item.candidate.provenance.every((entry) => entry.provider === "source_monitor");
+  const seriesResults = await mapPool(fetched.filter(isSeriesItem), config.seriesConcurrency, (item) => processSeriesItem(item));
+  const llmFallback = seriesResults.filter((entry) => entry.needsLlm).map((entry) => entry.item);
+  const seriesPages = seriesResults.filter((entry) => !entry.needsLlm).map((entry) => entry.result);
+  const otherPages = await mapPool(
+    [...fetched.filter((item) => !isSeriesItem(item)), ...llmFallback],
     config.llmConcurrency,
     async (item) => {
       try {
@@ -607,6 +689,7 @@ try {
     },
   );
 
+  const processedPages = [...seriesPages, ...otherPages];
   const successfulPages = processedPages.filter((item) => item.processed);
   const deduped = dedupeOpportunitiesDetailed(
     successfulPages.flatMap((item) => item.records),

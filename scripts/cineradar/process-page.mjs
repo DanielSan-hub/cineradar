@@ -51,6 +51,8 @@ async function validateCandidateUrl(url, page, fetchImpl) {
 
 function recordUrlFailure(metrics, kind, validation) {
   if (!validation || ["verified", "redirected"].includes(validation.status)) return;
+  // A FilmFreeway link left unopened on purpose is not a failure.
+  if (validation.reason === "HOST_BLOCKS_AUTOMATION") return;
   recordRejection(metrics, `${validation.reason ?? "URL_UNREACHABLE"}_${kind.toUpperCase()}`);
 }
 
@@ -64,29 +66,37 @@ export async function processFetchedPage({
   contentHash = null,
   fetchImpl = fetch,
   claimLlmCall = () => true,
+  // Items already read with rules (series-anchored extraction): skip both
+  // extractors, keep normalization, grounding and URL validation.
+  presetItems = null,
 }) {
   let rawItems;
   try {
-    const deterministic = deterministicPageExtraction(page, { sourceType });
-    if (deterministic.disposition === "complete") {
-      rawItems = deterministic.records;
-      incrementMetric(metrics, "deterministic", rawItems.length);
+    if (presetItems) {
+      rawItems = presetItems;
+      incrementMetric(metrics, "series_anchored", rawItems.length);
     } else {
-      if (!claimLlmCall()) {
-        const error = new Error("LLM run limit reached; deterministic extraction was ambiguous");
-        error.code = "LLM_RUN_LIMIT";
-        throw error;
+      const deterministic = deterministicPageExtraction(page, { sourceType });
+      if (deterministic.disposition === "complete") {
+        rawItems = deterministic.records;
+        incrementMetric(metrics, "deterministic", rawItems.length);
+      } else {
+        if (!claimLlmCall()) {
+          const error = new Error("LLM run limit reached; deterministic extraction was ambiguous");
+          error.code = "LLM_RUN_LIMIT";
+          throw error;
+        }
+        incrementMetric(metrics, "llm_calls");
+        rawItems = await extractOpportunities({
+          url: page.finalUrl,
+          title,
+          text: page.text,
+          links: page.links,
+          runId,
+          operation,
+          contentHash,
+        });
       }
-      incrementMetric(metrics, "llm_calls");
-      rawItems = await extractOpportunities({
-        url: page.finalUrl,
-        title,
-        text: page.text,
-        links: page.links,
-        runId,
-        operation,
-        contentHash,
-      });
     }
   } catch (error) {
     const code = error.code ?? "PARSING_ERROR";
