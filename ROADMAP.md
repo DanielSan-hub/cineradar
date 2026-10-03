@@ -103,7 +103,25 @@ Still open: format/runtime and region filters (need field completeness).
   (free only), region/eligibility, category.
 - Clear "last verified" and source links on every card (trust).
 
-## Priority 6 — coverage engine tuning (after 2–3 weeks of registry data)
+## Priority 6 — coverage engine tuning — IN PROGRESS 2026-10-03 (zero-spend plan)
+
+Owner target: 90% coverage at zero spend. Measured ceiling without
+FilmFreeway: ~85% theoretical, ~75% realistic (about 90% of the reachable
+market). The 8-point free plan and its state:
+1. Series-anchored extraction (rules on a series' own site, no LLM) — DONE.
+2. Readable platforms: Festhome — DONE (daily connector); FestAgent (needs
+   attribution) and ShortFilmDepot (JavaScript app) — later.
+3. Download robustness (retries, JS rendering, moved pages, TLS) — DONE.
+4. Own sites for series known only by name (Wikidata, Tavily free key from
+   the owner, strict domain check) — NEXT.
+5. Free LLM only where needed: Cloudflare + Groq model rotation — DONE.
+6. Registry for weak categories (grants, residencies, labs, brand challenges:
+   EU Funding & Tenders API, national funds, residency directories) — NEXT.
+7. Rhythm: the whole registry checked every 2–3 days; queue drained — DONE
+   (queue paging fix, monitor 4,500/run, Submit/Rules link gate).
+8. Weekly honest measurement on the datasets (local only) — running
+   (`coverage.mjs`, `work/miss-diagnosis.mjs`). 2026-10-03: found 22.6%
+   (held-out 12%), published 4.2%; misses mostly queued pages (29%).
 
 - Expose coverage and yield by category, region, source family, language
   (source yield = unique valid opportunities / checks; query yield = unique
@@ -138,6 +156,7 @@ unlock the most calls"), ML recommendations.
 - FilmFreeway structured crawling: blocked by a bot challenge; only with
   FilmFreeway's permission.
 - Cost: owner-approved pools replace the single EUR 5 cap (Exa 9/month,
-  everything else EUR 5 with a EUR 3 target).
+  everything else EUR 5 with a EUR 3 target). Since 2026-10-03 the owner
+  asked for zero spend: Exa is off and only free tiers are used.
 - "Coverage beyond 100 opportunities" was never the real state; progress is
   tracked with the measurements above.
