@@ -74,6 +74,22 @@ RPC and scores readiness; `/team` gains a "Ready to publish" tab once
   premiere rule; warn on conflicts. No simulation.
 - Show "For our films" in `/team` and fit badges on the review page.
 
+## Priority 4 (owner, 2026-10-03) — review precision near 100% — NOT STARTED
+
+Goal: 98-99% precision on published calls, measured, with little recall
+lost. In order:
+1. Measurement: a fixed sample of ~200 records (published, rejected,
+   pending) labelled right/wrong by the team in /team; precision and recall
+   per auto-review rule; every error becomes a regression test.
+2. Two-key approval: rules plus an independent free LLM check (Groq) of the
+   official page (a filmmaker call? open? this deadline for this call? which
+   organizer?); publish only when both agree, disagreements go to the team.
+3. Confidence tiers: only the safest case (organizer's domain, the call's own
+   page, the date printed there, no duplicate) is published automatically.
+4. After publication: every published call re-read on its page in rotation
+   (today only undated ones are), withdrawn when it changes; a "Report error"
+   button in /team that withdraws the call and becomes a test.
+
 ## Priority 4 — weekly brief (proactive, not a data dump) — DONE 2026-10-02 (delivery by copy/paste; WhatsApp adapter later)
 
 - Weekly GitHub Actions job builds 5–8 items from the database:
