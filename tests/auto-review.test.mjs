@@ -177,3 +177,11 @@ test("v5: section headings take the organizer's name; craft categories are named
   assert.equal(publicTitleFor("Screenplay Competition", "Sedona International Film Festival").title, "Sedona International Film Festival – Screenplay Competition");
   assert.equal(publicTitleFor("Euroscript Screenwriting Competition", "Euroscript").title, "Euroscript Screenwriting Competition");
 });
+
+test("a published call stays public until its deadline; a new one needs two days left", () => {
+  const tomorrow = { ...live, deadline: new Date(NOW + 1 * DAY).toISOString() };
+  assert.equal(autoReviewDecision(tomorrow, { now: NOW, page: goodPage }).decision, "watch");
+  const kept = autoReviewDecision(tomorrow, { now: NOW, page: goodPage, published: true });
+  assert.equal(kept.decision, "approve");
+  assert.equal(kept.targetStatus, "closing-soon");
+});

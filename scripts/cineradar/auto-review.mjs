@@ -482,6 +482,7 @@ const recheck = republished.map((row) => {
       duplicateOf: duplicates.get(row.id) ?? null,
       genericTitle: isGenericTitle(row.title),
       page,
+      published: true,
     }),
   };
 });
