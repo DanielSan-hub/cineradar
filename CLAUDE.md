@@ -164,13 +164,23 @@ discovery job 75 min. `requeue-pages.mjs` (dry run by default) puts series
 pages settled by older processors back in the queue once.
 Coverage on the owner's datasets (evaluation only; datasets stay local, run
 `work/miss-diagnosis.mjs` and `coverage.mjs` with `CINERADAR_SEED_DATASETS`):
-2026-10-03 found 22.6% (held-out 12%), published 4.2%. Misses: page queued
-but unprocessed 29%, found but not published 17%, homepage gated (call on a
-subpage) 10%, registered never checked 10%, FilmFreeway-only 10%, fetch
-failures 6%. The queue, gate and monitor fixes above target the first four.
-UI (needs a Sites deploy via Codex, commit `5ef1070` or later): "Submissions
-open - deadline on <platform>" badge and "Apply on <platform>" link for the
-platform-open calls (`deadlinePlatform` in `lib/opportunity-format.ts`).
+2026-10-03 before the fixes: found 22.6% (held-out 12%), published 4.2%;
+after two runs: found 31.1% (held-out 24%), published 4.4%. Remaining misses:
+page queued 36% (5,938 older series pages requeued once with
+`REQUEUE_PROCESSED_BEFORE=2026-10-02T22:30:00Z`; ~1,500 pages/run), found but
+not published 25% (mostly no deadline yet), FilmFreeway-only 10%, never
+checked 9%, fetch failures 6%. Live counts 2026-10-03 01:00 UTC: 2,775
+records, 1,794 pending, 148 public (anon-visible).
+Quality fixes after the first 50 v5 approvals: names (site name over a foreign
+registry name, call-page headings), blog/news posts never read as a series'
+call page, castings/actors' residencies are not film dates, aggregator news
+posts (On the Move) go to a human, name/organizer-swapped duplicates archived;
+5 calls withdrawn a day before their deadline by a re-check bug were
+re-approved (published calls now stay until their deadline).
+UI (needs a Sites deploy via Codex, commit `ac13ef4` or later; archive
+`work/deploy-ac13ef4-20261003.tar.gz`): "Submissions open - deadline on
+<platform>" badge and "Apply on <platform>" link for the platform-open calls
+(`deadlinePlatform` in `lib/opportunity-format.ts`).
 
 Owner approval 2026-09-28: Exa has its own budget pool of at most 9/month
 (ledger units; USD is counted 1:1 so real spend stays <= USD 9). All other
