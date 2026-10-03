@@ -226,6 +226,30 @@ gives USD 10 of free credits every month - verified on exa.ai: monthly reset,
 - Groq account models in rotation: gpt-oss-20b, gpt-oss-120b, qwen3.8-27b.
 Deploy target for the UI (FestAgent/EU attribution, platform badges): latest
 main (`4ef0cac` or later), archive `work/deploy-4ef0cac-20261003.tar.gz`.
+Update 2026-10-03 (evening; owner sent a source survey PDF and the example
+"AI Horizons" from ticonsiglio.com):
+- FESTHOME IS BLOCKED. Its Terms of Use (filmmakers.festhome.com/terms-of-use)
+  forbid "any systematic or automated data collection activities (including
+  ... scraping, data mining, data extraction and data harvesting)" without
+  express written consent, and republishing its material. The connector had
+  been built on robots.txt alone (mistake). festhome.com is in BLOCKED_HOSTS
+  (never fetched by any step); 136 published calls whose deadline came from
+  Festhome were reopened and return only if the festival's own site states
+  the date; ~590 Festhome-derived records are still stored (owner decision:
+  delete them, or ask Festhome for written consent). RULE: read a platform's
+  terms before automating it, not only robots.txt.
+- Docfilmdepot / ShortFilmDepot legal notice forbids reproducing or
+  summarising their content without consent: not integrated.
+- Lead feeds (`lead-feeds.mjs`): aggregators whose terms forbid reproduction
+  (ticonsiglio.com "Concorsi creativi" RSS) are read only for call NAMES; the
+  resolver finds the organizer's page (for leads, a call PDF in the site's
+  uploads or a page whose path names the call also counts).
+- Italy for Movies connector (`harvest-italy-for-movies.mjs`): national
+  portal of Italian film funds; open grants -> records with the funder's page
+  as official page; all funders' sites registered as sources.
+- Not yet audited: the terms of every directory read by
+  `harvest-directories.mjs` (it registers official sites only and copies no
+  fact) and of FestAgent beyond its footer ("use only with a link").
 
 Owner approval 2026-09-28: Exa has its own budget pool of at most 9/month
 (ledger units; USD is counted 1:1 so real spend stays <= USD 9). All other
