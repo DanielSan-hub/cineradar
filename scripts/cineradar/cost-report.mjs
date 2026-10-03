@@ -1,9 +1,10 @@
 import { config } from "./config.mjs";
 import {
-  getBudgetState, selectAllRows,
+  getBudgetState,
+  selectAllRows,
   projectConfiguredMonthlyCost,
 } from "./cost-control.mjs";
-import { assertSourceRegistrySchema, supabase } from "./supabase.mjs";
+import { assertSourceRegistrySchema } from "./supabase.mjs";
 
 function monthStart(now) {
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
