@@ -60,3 +60,13 @@ test("resolver precision: aggregators and generic words never tie a domain to a 
   assert.equal(pageNamesSeries({ html: "<title>Sinister Horror Film Festival 2026</title>" }, "SINISTER Horror Film Festival"), true);
   assert.equal(siteRoot("https://www.asymmetryart.org/public-programme/schedule"), "https://www.asymmetryart.org/");
 });
+
+test("lead feeds give only names of film, video and AI calls; the call page may sit on the organizer's site", async () => {
+  const { leadCallPage, leadName, parseRssItems, relevantLead } = await import("../scripts/cineradar/lead-feeds.mjs");
+  const items = parseRssItems(`<rss><channel><item><title>Concorso artistico sull&#8217;intelligenza artificiale &#8220;AI Horizons&#8221;: 6.000 euro di premi</title><link>https://www.ticonsiglio.com/ai-horizons/</link></item><item><title>Concorso fotografico Raccont&#8217;Arti 2026, premi fino a 3mila euro</title><link>https://www.ticonsiglio.com/x/</link></item><item><title>Accordi Disaccordi, Concorso internazionale di cortometraggi</title><link>https://www.ticonsiglio.com/y/</link></item></channel></rss>`);
+  assert.deepEqual(items.filter((item) => relevantLead(item.title)).map((item) => leadName(item.title)), ["AI Horizons", "Accordi Disaccordi"]);
+  assert.equal(leadCallPage("AI Horizons", { url: "https://parma360festival.it/wp-content/uploads/2026/05/Call-AI-HORIZONS.-Call-for-Artists-eng.pdf", title: "CALL FOR ARTISTS: AI Horizons" }), true);
+  // News articles and the lead's own site never count.
+  assert.equal(leadCallPage("AI Horizons", { url: "https://www.initaly.it/en/articolo/ai-horizons-call", title: "AI Horizons" }), false);
+  assert.equal(leadCallPage("AI Horizons", { url: "https://www.ticonsiglio.com/wp-content/uploads/2026/08/bando-call-ai-horizon.pdf", title: "bando" }, { exclude: ["ticonsiglio.com"] }), false);
+});

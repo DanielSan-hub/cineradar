@@ -20,6 +20,7 @@ import { usageIdempotencyKey } from "./cost-control.mjs";
 import { exaIsExhausted, ledgeredExaSearch } from "./exa.mjs";
 import { hostOf, isPlatformHost, pickOfficialSite, seriesKey } from "./registry-seeds.mjs";
 import { hostNamesSeries, pageNamesSeries, RESOLVER_EXCLUDE, resolvedSourceRow, resolverName, resolverQuery, siteRoot } from "./site-resolution.mjs";
+import { LEAD_FEEDS, leadCallPage, leadName, parseRssItems, relevantLead } from "./lead-feeds.mjs";
 import { createRobotsChecker } from "./robots.mjs";
 import { nameFitsHost } from "./series-extraction.mjs";
 import { finishRun, startRun, supabase } from "./supabase.mjs";
@@ -67,6 +68,12 @@ const register = (site) => {
   return true;
 };
 
+/** For a lead: the call's own document or page on the organizer's site. */
+function pickLeadPage(entry, results) {
+  if (!entry.lead) return null;
+  return (results ?? []).find((result) => leadCallPage(entry.name, result, { exclude: [...RESOLVER_EXCLUDE, entry.leadHost] }))?.url ?? null;
+}
+
 /** The first result the general rule accepts whose domain carries a distinctive word of the name. */
 function pickSite(name, results) {
   const usable = (results ?? []).filter((result) => !RESOLVER_EXCLUDE.some((host) => hostOf(result.url) === host || hostOf(result.url)?.endsWith(`.${host}`))
@@ -111,7 +118,23 @@ for (const source of deadSources) {
   candidates.set(key, { key, name: String(source.name).slice(0, 120), category, location: null, live: false, origin: "dead-domain" });
 }
 // Calls with a live deadline first: their own site is where they are confirmed.
-const queue = [...candidates.values()].sort((left, right) => Number(right.live) - Number(left.live));
+// 0. Leads: names of calls announced on lead feeds (headlines only; their
+//    text is never copied). Fresh announcements of open calls come first.
+const leads = [];
+for (const feed of LEAD_FEEDS) {
+  if (!(await robots(feed.url)).allowed) continue;
+  const response = await fetch(feed.url, { headers: { "user-agent": UA } }).catch(() => null);
+  if (!response?.ok) continue;
+  for (const item of parseRssItems(await response.text())) {
+    if (!relevantLead(item.title)) continue;
+    const name = leadName(item.title);
+    const key = name ? seriesKey(name) : "";
+    if (!key || key.length < 4 || candidates.has(key) || leads.some((lead) => lead.key === key)) continue;
+    leads.push({ key, name, category: null, location: null, live: true, origin: `lead:${feed.host}`, lead: true, leadHost: feed.host });
+  }
+}
+summary.leads = leads.length;
+const queue = [...leads, ...[...candidates.values()].sort((left, right) => Number(right.live) - Number(left.live))];
 summary.namesConsidered = queue.length;
 
 let tavilyLeft = SEARCH_LIMIT;
@@ -128,10 +151,10 @@ for (const entry of queue) {
   }
   if (tavilyLeft <= 0 && (exaLeft <= 0 || exaIsExhausted())) break;
   if (!apply) {
-    if (summary.examples.length < 15) summary.examples.push(`would search: ${resolverQuery(entry.name, entry)}`);
+    if (summary.examples.length < 15) summary.examples.push(`would search: ${entry.lead ? `${entry.name} call for entries` : resolverQuery(entry.name, entry)}`);
     continue;
   }
-  const text = resolverQuery(entry.name, entry);
+  const text = entry.lead ? `${entry.name} call for entries` : resolverQuery(entry.name, entry);
   const metadata = { series_key: entry.key, origin: entry.origin ?? "pending-record" };
   let results = null;
   let provider = null;
@@ -153,7 +176,7 @@ for (const entry of queue) {
       if (/CAP|EXHAUSTED|432|433|401|KEY_MISSING/.test(found.reason)) tavilyLeft = 0;
     }
   }
-  let url = results ? pickSite(entry.name, results) : null;
+  let url = results ? pickSite(entry.name, results) ?? pickLeadPage(entry, results) : null;
   if (!url && exaLeft > 0 && config.exaApiKey && !exaIsExhausted()) {
     const found = await ledgeredExaSearch({
       idempotencyKey: usageIdempotencyKey(["site-resolution", "exa", entry.key, month]),
@@ -168,7 +191,7 @@ for (const entry of queue) {
     if (!found.blocked) {
       exaLeft -= 1;
       summary.searched.exa += 1;
-      url = pickSite(entry.name, found.results);
+      url = pickSite(entry.name, found.results) ?? pickLeadPage(entry, found.results);
       provider = "exa";
     } else if (!summary.blocked.includes(found.reason)) {
       summary.blocked.push(found.reason);
@@ -179,7 +202,10 @@ for (const entry of queue) {
   if (!url) continue;
   // The series' own homepage is checked and registered, not a deep page.
   const site = await readSite(siteRoot(url));
-  if (!site || !pageNamesSeries(site, entry.name)) {
+  // A lead's call page sits on the organizer's site, whose homepage may not
+  // name the call: the call page itself was matched by name.
+  const leadPage = entry.lead && !hostNamesSeries(entry.name, url);
+  if (!site || (!leadPage && !pageNamesSeries(site, entry.name))) {
     summary.rejectedByPageCheck += 1;
     continue;
   }
