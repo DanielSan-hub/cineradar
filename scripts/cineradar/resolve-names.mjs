@@ -21,7 +21,7 @@ import { usageIdempotencyKey } from "./cost-control.mjs";
 import { exaIsExhausted, ledgeredExaSearch } from "./exa.mjs";
 import { platformWebsite } from "./platform-connectors.mjs";
 import { hostOf, isPlatformHost, pickOfficialSite, seriesKey } from "./registry-seeds.mjs";
-import { pageNamesSeries, RESOLVER_EXCLUDE, resolvedSourceRow, resolverName, resolverQuery } from "./site-resolution.mjs";
+import { hostNamesSeries, pageNamesSeries, RESOLVER_EXCLUDE, resolvedSourceRow, resolverName, resolverQuery, siteRoot } from "./site-resolution.mjs";
 import { createRobotsChecker } from "./robots.mjs";
 import { nameFitsHost } from "./series-extraction.mjs";
 import { finishRun, startRun, supabase } from "./supabase.mjs";
@@ -71,6 +71,13 @@ const register = (site) => {
   fresh.push(resolvedSourceRow(site));
   return true;
 };
+
+/** The first result the general rule accepts whose domain carries a distinctive word of the name. */
+function pickSite(name, results) {
+  const usable = (results ?? []).filter((result) => !RESOLVER_EXCLUDE.some((host) => hostOf(result.url) === host || hostOf(result.url)?.endsWith(`.${host}`))
+    && hostNamesSeries(name, result.url));
+  return pickOfficialSite(name, usable);
+}
 
 async function readSite(url) {
   if (!url || isPlatformHost(hostOf(url) ?? "") || RESOLVER_EXCLUDE.some((host) => hostOf(url) === host || hostOf(url)?.endsWith(`.${host}`))) return null;
@@ -186,7 +193,7 @@ for (const entry of queue) {
       if (/CAP|EXHAUSTED|432|433|401|KEY_MISSING/.test(found.reason)) tavilyLeft = 0;
     }
   }
-  let url = results ? pickOfficialSite(entry.name, results) : null;
+  let url = results ? pickSite(entry.name, results) : null;
   if (!url && exaLeft > 0 && config.exaApiKey && !exaIsExhausted()) {
     const found = await ledgeredExaSearch({
       idempotencyKey: usageIdempotencyKey(["site-resolution", "exa", entry.key, month]),
@@ -201,7 +208,7 @@ for (const entry of queue) {
     if (!found.blocked) {
       exaLeft -= 1;
       summary.searched.exa += 1;
-      url = pickOfficialSite(entry.name, found.results);
+      url = pickSite(entry.name, found.results);
       provider = "exa";
     } else if (!summary.blocked.includes(found.reason)) {
       summary.blocked.push(found.reason);
@@ -210,7 +217,8 @@ for (const entry of queue) {
   }
   tried.add(entry.key);
   if (!url) continue;
-  const site = await readSite(url);
+  // The series' own homepage is checked and registered, not a deep page.
+  const site = await readSite(siteRoot(url));
   if (!site || !pageNamesSeries(site, entry.name)) {
     summary.rejectedByPageCheck += 1;
     continue;

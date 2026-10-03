@@ -49,3 +49,14 @@ test("a found site counts only when its domain and its own page name the series"
   assert.equal(row.source_family, "official-site");
   assert.equal(resolvedSourceRow({ name: "X", url: "https://x.ai/", category: "AI film festival", origin: "exa" }).priority, 1);
 });
+
+test("resolver precision: aggregators and generic words never tie a domain to a name", async () => {
+  const { hostNamesSeries, siteRoot } = await import("../scripts/cineradar/site-resolution.mjs");
+  assert.equal(hostNamesSeries("A4 Residency Art Center", "https://www.artconnect.com/opportunity/x"), false);
+  assert.equal(hostNamesSeries("Kinofest Lünen", "https://www.kinofest-luenen.de/"), true);
+  assert.equal(hostNamesSeries("Sedona International Film Festival", "https://sedonafilmfestival.com/"), true);
+  // The page must name the series, not merely share one word with it.
+  assert.equal(pageNamesSeries({ html: "<title>Sinister Creature Con</title>" }, "SINISTER Horror Film Festival"), false);
+  assert.equal(pageNamesSeries({ html: "<title>Sinister Horror Film Festival 2026</title>" }, "SINISTER Horror Film Festival"), true);
+  assert.equal(siteRoot("https://www.asymmetryart.org/public-programme/schedule"), "https://www.asymmetryart.org/");
+});

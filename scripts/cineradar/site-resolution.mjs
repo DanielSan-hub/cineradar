@@ -12,7 +12,10 @@ export const RESOLVER_EXCLUDE = Object.freeze([
   "reddit.com", "medium.com", "festivalfocus.org", "filmfestivallife.com", "withoutabox.com",
   "stage32.com", "backstage.com", "festivalreel.com", "filmfestivalguild.com", "stayhappening.com",
   "aifilmcontests.com", "kajimelo.com", "on-the-move.org", "e-flux.com", "artrabbit.com",
-  "transartists.org", "resartis.org", "web.archive.org", "wixsite.com",
+  "transartists.org", "resartis.org", "web.archive.org", "wixsite.com", "artconnect.com",
+  "callforentry.org", "zapplication.org", "curatorspace.com", "artworkarchive.com", "artsy.net",
+  "nyfa.org", "wooloo.org", "re-title.com", "artenda.net", "artjobs.com", "creativeboom.com",
+  "screendaily.com", "variety.com", "indiewire.com", "deadline.com", "cineuropa.org",
 ]);
 
 const GENERIC_NAME = /^(?:unknown(?:\s+organizer)?|submissions?|call for entries|festival|film festival|competition|open call|home)$/iu;
@@ -57,7 +60,34 @@ export function pageNamesSeries(page, name) {
   const wanted = seriesKey(name).split(" ").filter((token) => token.length >= 3);
   if (!wanted.length) return false;
   const shared = wanted.filter((token) => haystack.includes(token)).length;
-  return shared / wanted.length >= 0.5;
+  // Every distinctive word, or at least 60% of them and two or more: a page
+  // titled "Sinister Creature Con" does not name "Sinister Horror".
+  return wanted.length === 1 ? shared === 1 : shared >= 2 && shared / wanted.length >= 0.6;
+}
+
+// Words that name a kind of thing, not a series: they cannot tie a domain to it.
+const GENERIC_WORD = new Set(["art", "arts", "film", "films", "cine", "cinema", "screen", "festival", "fest", "center", "centre", "international", "short", "shorts", "horror", "media", "residency", "residence", "foundation", "fund", "award", "awards", "prize", "lab", "labs", "studio", "studios", "project", "projects", "program", "programme", "culture", "cultural", "creative", "new", "open", "call", "world", "global", "national", "city"]);
+
+/** The found site's domain carries a distinctive word of the name (4+ letters) or its initials. */
+export function hostNamesSeries(name, url) {
+  let label = "";
+  try {
+    label = new URL(url).hostname.toLowerCase().replace(/^www\./, "").split(".").slice(0, -1).join("").replace(/[^a-z0-9]/g, "");
+  } catch {
+    return false;
+  }
+  const tokens = seriesKey(name).split(" ").filter((token) => token.length >= 4 && !GENERIC_WORD.has(token));
+  const initials = String(name ?? "").split(/[^\p{L}\p{N}]+/u).filter((word) => word && !/^(?:the|of|and|for|de|la|di|du)$/i.test(word)).map((word) => word[0]).join("").toLowerCase();
+  return tokens.some((token) => label.includes(token)) || (initials.length >= 3 && label.includes(initials));
+}
+
+/** The site's homepage (a found page may be deep inside it). */
+export function siteRoot(url) {
+  try {
+    return `${new URL(url).origin}/`;
+  } catch {
+    return null;
+  }
 }
 
 /** A site registered as a monitored series source (the monitor reads it from now). */
