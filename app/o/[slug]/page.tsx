@@ -17,7 +17,7 @@ import {
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
-import { deadlineCountdown, deadlinePlatform, formatDeadline, formatMoney, aiPolicyLabel, platformApplyUrl, platformCountdown } from "@/lib/opportunity-format";
+import { dataSourceName, deadlineCountdown, deadlinePlatform, formatDeadline, formatMoney, aiPolicyLabel, platformApplyUrl, platformCountdown } from "@/lib/opportunity-format";
 import { getPublicOpportunity } from "@/lib/server/data";
 import type { Opportunity } from "@/lib/types";
 
@@ -80,6 +80,10 @@ export default async function OpportunityPage({ params }: PageProps) {
   const applicationUrl = verifiedLink(opportunity.applicationUrl, opportunity.applicationUrlVerified)
     ?? platformApplyUrl(opportunity.applicationUrl, platform);
   const applyLabel = platform && !opportunity.applicationUrlVerified ? `Apply on ${platform}` : "Apply";
+  // Facts read on a festival platform link back to it (FestAgent requires it).
+  const sourcePlatform = dataSourceName(opportunity.sourceUrl);
+  const deadlineSourceUrl = verifiedLink(opportunity.deadlineSourceUrl, true);
+  const deadlinePlatformName = dataSourceName(deadlineSourceUrl);
   const sourceUrl = verifiedLink(opportunity.sourceUrl, true);
   const lastChecked = formatDate(opportunity.officialUrlLastCheckedAt ?? opportunity.verifiedAt);
   const closed = countdown.tone === "closed";
@@ -138,7 +142,10 @@ export default async function OpportunityPage({ params }: PageProps) {
             <a href={officialUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-xl border border-white/12 bg-white/4 px-5 py-3 text-sm font-medium text-white transition hover:bg-white/8">Official page <ArrowUpRight className="size-4" /></a>
           )}
           {sourceUrl && sourceUrl !== officialUrl && (
-            <a href={sourceUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-xl border border-white/12 bg-white/4 px-5 py-3 text-sm font-medium text-white transition hover:bg-white/8">Where we found it <ArrowUpRight className="size-4" /></a>
+            <a href={sourceUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-xl border border-white/12 bg-white/4 px-5 py-3 text-sm font-medium text-white transition hover:bg-white/8">{sourcePlatform ? `Where we found it: ${sourcePlatform}` : "Where we found it"} <ArrowUpRight className="size-4" /></a>
+          )}
+          {deadlinePlatformName && deadlineSourceUrl && deadlineSourceUrl !== sourceUrl && (
+            <a href={deadlineSourceUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-xl border border-white/12 bg-white/4 px-5 py-3 text-sm font-medium text-white transition hover:bg-white/8">Deadline from {deadlinePlatformName} <ArrowUpRight className="size-4" /></a>
           )}
         </div>
 
@@ -154,7 +161,7 @@ export default async function OpportunityPage({ params }: PageProps) {
 
         {deadlineQuote && (
           <figure className="mt-6 rounded-2xl border border-white/8 bg-white/[0.025] p-5">
-            <figcaption className="flex items-center gap-2 text-xs font-medium uppercase tracking-[0.14em] text-slate-500"><Quote className="size-3.5" /> As stated on the page</figcaption>
+            <figcaption className="flex items-center gap-2 text-xs font-medium uppercase tracking-[0.14em] text-slate-500"><Quote className="size-3.5" /> {deadlinePlatformName ? `As stated on ${deadlinePlatformName}` : "As stated on the page"}</figcaption>
             <blockquote className="mt-3 text-base leading-7 text-slate-200">“{deadlineQuote}”</blockquote>
           </figure>
         )}
@@ -164,7 +171,9 @@ export default async function OpportunityPage({ params }: PageProps) {
 
         <footer className="mt-12 border-t border-white/8 pt-6 text-sm leading-6 text-slate-500">
           {lastChecked ? <p>Official page last checked {lastChecked}.</p> : null}
-          <p>Facts come from the organizer&apos;s own pages; anything not stated there is shown as not stated. Always confirm rules and dates on the official page before applying.</p>
+          <p>{deadlinePlatformName
+            ? `Dates come from the festival's page on ${deadlinePlatformName} (linked above); anything not stated there is shown as not stated. Always confirm rules and dates on the official page before applying.`
+            : "Facts come from the organizer's own pages; anything not stated there is shown as not stated. Always confirm rules and dates on the official page before applying."}</p>
         </footer>
       </main>
     </div>

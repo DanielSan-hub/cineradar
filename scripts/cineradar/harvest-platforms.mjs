@@ -1,27 +1,37 @@
-// Daily platform connector (Festhome). Festhome lists open festivals sorted by
-// their next deadline, so the listing is read until the cards stop showing a
-// future date (~60 pages). Only new or changed cards are opened; each festival
-// page yields a record (final submission deadline, the festival's own website,
-// rules for the decision fields) through the usual normalization, and the
-// festival's own website joins the registry as a monitored series source.
-// One request per second; robots.txt is checked; FilmFreeway is never used.
+// Daily platform connectors: Festhome and FestAgent (robots.txt allows both;
+// FilmFreeway is never used). Each lists open festivals sorted by their next
+// deadline, so the listing is read until the cards stop showing a future date.
+// Only new or changed cards are opened; each festival page yields a record
+// (final submission deadline, the festival's own website) through the usual
+// normalization, and the festival's own website joins the registry as a
+// monitored series source. One request per 1-1.5 s; no LLM, no paid service.
+//
+// FestAgent asks for a link to the source wherever its information is used:
+// its records keep the FestAgent page as source and deadline source, and
+// never use it as an application link.
 //
 //   node scripts/cineradar/harvest-platforms.mjs           # dry run
 //   node scripts/cineradar/harvest-platforms.mjs --apply   # write
+//   PLATFORMS=festagent node scripts/cineradar/harvest-platforms.mjs
 
 import { createHash } from "node:crypto";
 
 import { dedupeOpportunitiesDetailed } from "./normalization.mjs";
 import { persistProvenance, withProvenance } from "./operations.mjs";
 import {
+  FESTAGENT_LISTING,
+  festagentDetailUrl,
+  festagentListingPage,
+  festagentRawItem,
   FESTHOME_LISTING,
-  festhomeListingPage,
   festhomeDetailUrl,
+  festhomeListingPage,
   festhomeRawItem,
+  parseFestagentListing,
   parseFesthomeListing,
 } from "./platform-connectors.mjs";
 import { processFetchedPage } from "./process-page.mjs";
-import { hostOf } from "./registry-seeds.mjs";
+import { hostOf, isPlatformHost } from "./registry-seeds.mjs";
 import { createRobotsChecker } from "./robots.mjs";
 import { finishRun, ingest, startRun, supabase } from "./supabase.mjs";
 import { createRunMetrics, incrementMetric, metricsRunPatch, recordRejection, summarizeMetrics } from "./telemetry.mjs";
@@ -32,128 +42,87 @@ const number = (name, fallback) => {
   const value = Number(process.env[name]);
   return Number.isFinite(value) && value > 0 ? Math.trunc(value) : fallback;
 };
-const MAX_LISTING_PAGES = number("FESTHOME_LISTING_PAGES", 150);
-const DETAIL_LIMIT = number("FESTHOME_DETAIL_LIMIT", 300);
 const deadlineAt = Date.now() + number("PLATFORM_TIME_BUDGET_SECONDS", 600) * 1000;
 const UA = "CineRadarBot/2.0 (+https://cineradar.danielmaker.chatgpt.site)";
 const robots = createRobotsChecker({ userAgent: UA });
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const metrics = createRunMetrics("discovery");
 const now = Date.now();
+const isFuture = (date) => Date.parse(`${date}T23:59:59Z`) >= now;
 
-const [platformSource] = await supabase("sources?select=id,url,adapter_config&url=eq.https://festhome.com/festivals&limit=1");
-if (!platformSource) throw new Error("The Festhome Festivals source is not registered");
-const state = { ...(platformSource.adapter_config?.platform_state ?? {}) };
-const summary = { mode: apply ? "apply" : "dry-run", listingPages: 0, openCards: 0, changedCards: 0, detailsFetched: 0, records: 0, inserted: 0, updated: 0, newSources: 0, stoppedByTimeBudget: false };
+const PLATFORMS = {
+  festhome: {
+    name: "Festhome",
+    sourceUrl: "https://festhome.com/festivals",
+    sourceName: "Festhome Festivals",
+    listing: FESTHOME_LISTING,
+    maxPages: number("FESTHOME_LISTING_PAGES", 150),
+    detailLimit: number("FESTHOME_DETAIL_LIMIT", 300),
+    pauseMs: 1000,
+    // Later pages are the listing's own AJAX fragments (12 cards each).
+    listingRequest: (page) => ({ url: page === 1 ? FESTHOME_LISTING : festhomeListingPage(page), headers: page > 1 ? { "X-Requested-With": "XMLHttpRequest" } : {} }),
+    parseListing: (html) => ({ cards: parseFesthomeListing(html), total: NaN }),
+    detailUrl: (card) => festhomeDetailUrl(card.id),
+    rawItem: festhomeRawItem,
+    // Only the websites of festivals opened in detail are known.
+    websitesFromListing: false,
+  },
+  festagent: {
+    name: "FestAgent",
+    sourceUrl: FESTAGENT_LISTING,
+    sourceName: "FestAgent Festivals",
+    listing: FESTAGENT_LISTING,
+    maxPages: number("FESTAGENT_LISTING_PAGES", 60),
+    detailLimit: number("FESTAGENT_DETAIL_LIMIT", 150),
+    pauseMs: 1500,
+    // The free default listing only (no cookies, no subscription filters).
+    listingRequest: (page) => ({ url: festagentListingPage(page), headers: {} }),
+    parseListing: parseFestagentListing,
+    detailUrl: (card) => festagentDetailUrl(card.slug),
+    rawItem: festagentRawItem,
+    // Every card names the festival's own website: registered for free,
+    // including closed festivals (their next edition is announced there).
+    websitesFromListing: true,
+  },
+};
+const selected = String(process.env.PLATFORMS ?? "festhome,festagent").split(",").map((value) => value.trim()).filter((key) => PLATFORMS[key]);
 
-if (!(await robots(FESTHOME_LISTING)).allowed) throw new Error("robots.txt disallows the Festhome listing");
-
-// 1. Listing: open festivals first, sorted by the next deadline.
-const cards = [];
-let pagesWithoutFuture = 0;
-const seenCards = new Set();
-for (let page = 1; page <= MAX_LISTING_PAGES && Date.now() < deadlineAt; page += 1) {
-  // Later pages are the listing's own AJAX fragments (12 cards each).
-  const url = page === 1 ? FESTHOME_LISTING : festhomeListingPage(page);
-  let pageCards = [];
-  try {
-    const response = await fetch(url, { headers: { "user-agent": UA, ...(page > 1 ? { "X-Requested-With": "XMLHttpRequest" } : {}) } });
-    if (response.ok) pageCards = parseFesthomeListing(await response.text());
-  } catch {
-    recordRejection(metrics, "PLATFORM_LISTING_FAILED");
-  }
-  summary.listingPages += 1;
-  const future = pageCards.filter((card) => !seenCards.has(card.id) && card.dates.some((date) => Date.parse(`${date}T23:59:59Z`) >= now));
-  for (const card of future) seenCards.add(card.id);
-  cards.push(...future);
-  // A featured card repeats on every page: only cards not seen yet count.
-  pagesWithoutFuture = future.length ? 0 : pagesWithoutFuture + 1;
-  if (pagesWithoutFuture >= 2) break;
-  await sleep(1000);
-}
-summary.openCards = cards.length;
-const cardHash = (card) => createHash("sha256").update(`${card.name}|${card.dates.join(",")}`).digest("hex").slice(0, 12);
-const changed = cards.filter((card) => state[card.id] !== cardHash(card)).slice(0, DETAIL_LIMIT);
-summary.changedCards = changed.length;
-
-// 2. Festival pages: one record each, plus the festival's own website.
-const run = apply ? await startRun("discovery") : { id: null };
-const records = [];
-const websites = new Map();
-for (const card of changed) {
-  if (Date.now() > deadlineAt) {
-    summary.stoppedByTimeBudget = true;
-    break;
-  }
-  const url = festhomeDetailUrl(card.id);
-  if (!(await robots(url)).allowed) continue;
-  await sleep(1000);
-  let page;
-  try {
-    page = await fetchPage(url);
-  } catch (error) {
-    recordRejection(metrics, error.code ?? "PLATFORM_FETCH_FAILED");
-    continue;
-  }
-  summary.detailsFetched += 1;
-  incrementMetric(metrics, "fetched");
-  const raw = festhomeRawItem({ page, card, now });
-  // Only open calls become records; the card is remembered either way.
-  if (!raw || raw.observed_status === "closed") {
-    recordRejection(metrics, raw ? "PLATFORM_DEADLINE_PASSED" : "PLATFORM_NO_DEADLINE");
-    state[card.id] = cardHash(card);
-    continue;
-  }
-  try {
-    const produced = await processFetchedPage({
-      page,
-      title: card.name,
-      sourceType: "community",
-      metrics,
-      runId: run.id,
-      operation: "platform_extract",
-      presetItems: [raw],
-    });
-    for (const record of produced) {
-      records.push(withProvenance(record, [{
-        provider: "festhome",
-        queryId: null,
-        queryText: null,
-        sourceId: platformSource.id,
-        sourceUrl: url,
-        resultRank: null,
-        observedAt: page.checkedAt,
-        metadata: { festhome_id: card.id },
-      }]));
-      const website = record.official_url;
-      if (website && !websites.has(hostOf(website))) websites.set(hostOf(website), { url: website, name: raw.organizer, ai: record.category === "AI film festival" });
-    }
-    state[card.id] = cardHash(card);
-  } catch (error) {
-    recordRejection(metrics, error.code ?? "PLATFORM_EXTRACTION_FAILED");
-  }
+async function platformSource(platform) {
+  const [row] = await supabase(`sources?select=id,url,adapter_config&url=eq.${encodeURIComponent(platform.sourceUrl)}&limit=1`);
+  if (row || !apply) return row ?? { id: null, url: platform.sourceUrl, adapter_config: {} };
+  // The connector's own registry row (holds its listing state). Disabled: the
+  // monitor never reads it, only this connector does.
+  const [created] = await supabase("sources?on_conflict=url", {
+    method: "POST",
+    prefer: "resolution=merge-duplicates,return=representation",
+    body: JSON.stringify([{
+      name: platform.sourceName,
+      url: platform.sourceUrl,
+      enabled: false,
+      tier: 1,
+      priority: 2,
+      source_type: "community",
+      source_family: "structured-festival",
+      opportunity_categories: ["film-festival"],
+      adapter: "platform-connector",
+      adapter_config: { checkpoint_key: "default", platform_state: {} },
+    }]),
+  });
+  return created;
 }
 
-// 3. Store records, provenance, new registry sources and the listing state.
-const deduped = dedupeOpportunitiesDetailed(records);
-summary.records = deduped.records.length;
-if (apply && deduped.records.length) {
-  const result = await ingest(deduped.records, { temporalProjection: false });
-  summary.inserted = result.inserted;
-  summary.updated = result.updated;
-  incrementMetric(metrics, "stored", result.stored);
-  await persistProvenance(deduped.records, result.records, run.id);
-}
-if (apply && websites.size) {
+async function knownHosts(hosts) {
   const known = new Set();
-  for (const hosts of [[...websites.keys()]]) {
-    for (let index = 0; index < hosts.length; index += 100) {
-      const batch = hosts.slice(index, index + 100);
-      const rows = await supabase(`sources?select=url&or=(${batch.map((host) => `url.ilike.*${encodeURIComponent(host)}*`).join(",")})`).catch(() => []);
-      for (const row of rows) known.add(hostOf(row.url));
-    }
+  for (let index = 0; index < hosts.length; index += 100) {
+    const batch = hosts.slice(index, index + 100);
+    const rows = await supabase(`sources?select=url&or=(${batch.map((host) => `url.ilike.*${encodeURIComponent(host)}*`).join(",")})`).catch(() => []);
+    for (const row of rows) known.add(hostOf(row.url));
   }
-  const fresh = [...websites.entries()].filter(([host]) => !known.has(host)).map(([, site]) => ({
+  return known;
+}
+
+function websiteSource(site, platform) {
+  return {
     name: site.name.slice(0, 200),
     url: site.url,
     tier: 2,
@@ -162,23 +131,157 @@ if (apply && websites.size) {
     source_family: site.ai ? "ai-creative-tech" : "official-site",
     opportunity_categories: site.ai ? ["ai-film"] : ["film-festival"],
     adapter: "link-window",
-    adapter_config: { checkpoint_key: "default", link_window_size: 6, seed: "platform:festhome" },
+    adapter_config: { checkpoint_key: "default", link_window_size: 6, seed: `platform:${platform}` },
     min_poll_interval_minutes: 360,
     poll_interval_minutes: 1_440,
     max_poll_interval_minutes: 10_080,
     next_check_at: new Date().toISOString(),
-  }));
-  for (let index = 0; index < fresh.length; index += 200) {
-    await supabase("sources?on_conflict=url", { method: "POST", prefer: "resolution=ignore-duplicates,return=minimal", body: JSON.stringify(fresh.slice(index, index + 200)) });
+  };
+}
+
+const run = apply ? await startRun("discovery") : { id: null };
+const report = { mode: apply ? "apply" : "dry-run", platforms: {} };
+const records = [];
+
+for (const key of selected) {
+  const platform = PLATFORMS[key];
+  const summary = { listingPages: 0, listedCards: 0, openCards: 0, changedCards: 0, detailsFetched: 0, records: 0, websitesListed: 0, newSources: 0, stoppedByTimeBudget: false };
+  report.platforms[key] = summary;
+  if (!(await robots(platform.listing)).allowed) {
+    summary.error = "robots.txt disallows the listing";
+    continue;
   }
-  summary.newSources = fresh.length;
+  const source = await platformSource(platform);
+  const state = { ...(source?.adapter_config?.platform_state ?? {}) };
+
+  // 1. Listing: open festivals first, sorted by the next deadline.
+  const cards = [];
+  const websites = new Map();
+  const seen = new Set();
+  let pagesWithoutFuture = 0;
+  let lastPage = platform.maxPages;
+  for (let page = 1; page <= Math.min(platform.maxPages, lastPage) && Date.now() < deadlineAt; page += 1) {
+    const request = platform.listingRequest(page);
+    let parsed = { cards: [], total: NaN };
+    try {
+      const response = await fetch(request.url, { headers: { "user-agent": UA, ...request.headers } });
+      if (response.ok) parsed = platform.parseListing(await response.text());
+    } catch {
+      recordRejection(metrics, "PLATFORM_LISTING_FAILED");
+    }
+    summary.listingPages += 1;
+    if (page === 1 && !parsed.cards.length) {
+      summary.error = "the first listing page gave no cards (markup changed?)";
+      break;
+    }
+    if (page === 1 && Number.isFinite(parsed.total) && parsed.total > 0) lastPage = Math.ceil(parsed.total / Math.max(1, parsed.cards.length));
+    const unseen = parsed.cards.filter((card) => !seen.has(card.id));
+    for (const card of unseen) {
+      seen.add(card.id);
+      summary.listedCards += 1;
+      if (platform.websitesFromListing && card.website && !isPlatformHost(hostOf(card.website) ?? "")) {
+        const host = hostOf(card.website);
+        if (host && !websites.has(host)) websites.set(host, { url: card.website, name: card.name, ai: false });
+      }
+    }
+    const future = unseen.filter((card) => card.dates.some(isFuture));
+    cards.push(...future);
+    // A featured card may repeat on every page: only unseen cards count. The
+    // FestAgent listing goes on past the open calls only to list websites.
+    pagesWithoutFuture = future.length ? 0 : pagesWithoutFuture + 1;
+    if (pagesWithoutFuture >= 2 && !platform.websitesFromListing) break;
+    await sleep(platform.pauseMs);
+  }
+  summary.openCards = cards.length;
+  summary.websitesListed = websites.size;
+  const cardHash = (card) => createHash("sha256").update(`${card.name}|${card.dates.join(",")}`).digest("hex").slice(0, 12);
+  const changed = cards.filter((card) => state[card.id] !== cardHash(card)).slice(0, platform.detailLimit);
+  summary.changedCards = changed.length;
+
+  // 2. Festival pages: one record each, plus the festival's own website.
+  for (const card of changed) {
+    if (Date.now() > deadlineAt) {
+      summary.stoppedByTimeBudget = true;
+      break;
+    }
+    const url = platform.detailUrl(card);
+    if (!(await robots(url)).allowed) continue;
+    await sleep(platform.pauseMs);
+    let page;
+    try {
+      page = await fetchPage(url);
+    } catch (error) {
+      recordRejection(metrics, error.code ?? "PLATFORM_FETCH_FAILED");
+      continue;
+    }
+    summary.detailsFetched += 1;
+    incrementMetric(metrics, "fetched");
+    const raw = platform.rawItem({ page, card, now });
+    // Only open calls become records; the card is remembered either way.
+    if (!raw || raw.observed_status === "closed") {
+      recordRejection(metrics, raw ? "PLATFORM_DEADLINE_PASSED" : "PLATFORM_NO_DEADLINE");
+      state[card.id] = cardHash(card);
+      continue;
+    }
+    try {
+      const produced = await processFetchedPage({
+        page,
+        title: card.name,
+        sourceType: "community",
+        metrics,
+        runId: run.id,
+        operation: "platform_extract",
+        presetItems: [raw],
+      });
+      for (const record of produced) {
+        records.push(withProvenance(record, [{
+          provider: key,
+          queryId: null,
+          queryText: null,
+          sourceId: source?.id ?? null,
+          sourceUrl: url,
+          resultRank: null,
+          observedAt: page.checkedAt,
+          metadata: { [`${key}_id`]: card.id },
+        }]));
+        summary.records += 1;
+        const website = record.official_url;
+        const host = hostOf(website);
+        if (website && host && !websites.has(host)) websites.set(host, { url: website, name: raw.organizer, ai: record.category === "AI film festival" });
+        else if (host && record.category === "AI film festival") websites.get(host).ai = true;
+      }
+      state[card.id] = cardHash(card);
+    } catch (error) {
+      recordRejection(metrics, error.code ?? "PLATFORM_EXTRACTION_FAILED");
+    }
+  }
+
+  // 3. New festival websites join the registry; the listing state is saved.
+  if (apply && websites.size) {
+    const known = await knownHosts([...websites.keys()]);
+    const fresh = [...websites.entries()].filter(([host]) => !known.has(host)).map(([, site]) => websiteSource(site, key));
+    for (let index = 0; index < fresh.length; index += 200) {
+      await supabase("sources?on_conflict=url", { method: "POST", prefer: "resolution=ignore-duplicates,return=minimal", body: JSON.stringify(fresh.slice(index, index + 200)) });
+    }
+    summary.newSources = fresh.length;
+  }
+  if (apply && source?.id) {
+    await supabase(`sources?id=eq.${source.id}`, {
+      method: "PATCH",
+      prefer: "return=minimal",
+      body: JSON.stringify({ adapter_config: { ...(source.adapter_config ?? {}), platform_state: state }, last_checked_at: new Date().toISOString() }),
+    });
+  }
 }
-if (apply) {
-  await supabase(`sources?id=eq.${platformSource.id}`, {
-    method: "PATCH",
-    prefer: "return=minimal",
-    body: JSON.stringify({ adapter_config: { ...(platformSource.adapter_config ?? {}), platform_state: state }, last_checked_at: new Date().toISOString() }),
-  });
-  await finishRun(run.id, { ...metricsRunPatch(metrics), status: "succeeded" });
+
+const deduped = dedupeOpportunitiesDetailed(records);
+report.records = deduped.records.length;
+if (apply && deduped.records.length) {
+  const result = await ingest(deduped.records, { temporalProjection: false });
+  report.inserted = result.inserted;
+  report.updated = result.updated;
+  incrementMetric(metrics, "stored", result.stored);
+  await persistProvenance(deduped.records, result.records, run.id);
 }
-console.log(JSON.stringify({ ...summary, metrics: summarizeMetrics(metrics) }, null, 2));
+if (apply) await finishRun(run.id, { ...metricsRunPatch(metrics), status: "succeeded" });
+console.log(JSON.stringify({ ...report, metrics: summarizeMetrics(metrics) }, null, 2));

@@ -74,7 +74,6 @@ const SUBMISSION_PLATFORMS = [
   { slug: "filmfestplatform", name: "FilmFestPlatform", host: "filmfestplatform.com" },
   { slug: "submittable", name: "Submittable", host: "submittable.com" },
   { slug: "filmchief", name: "FilmChief", host: "filmchief.com" },
-  { slug: "festagent", name: "FestAgent", host: "festagent.com" },
 ] as const;
 
 type PlatformCall = { deadline: string | null; deadlineStatus?: DeadlineStatus; tags?: string[] };
@@ -100,6 +99,25 @@ export function platformApplyUrl(url: string | null | undefined, platform: strin
     const host = parsed.hostname.toLowerCase();
     const onPlatform = host === entry.host || host.endsWith(`.${entry.host}`);
     return onPlatform && ["http:", "https:"].includes(parsed.protocol) ? parsed.href : null;
+  } catch {
+    return null;
+  }
+}
+
+// Festival directories and platforms whose information CineRadar shows with a
+// link back to them (FestAgent asks for it: "only if a link to the source is
+// provided").
+const DATA_SOURCES = [
+  { name: "FestAgent", host: "festagent.com" },
+  { name: "Festhome", host: "festhome.com" },
+] as const;
+
+/** "FestAgent" or "Festhome" when a URL is on that platform, else null. */
+export function dataSourceName(url: string | null | undefined) {
+  if (!url) return null;
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    return DATA_SOURCES.find((source) => host === source.host || host.endsWith(`.${source.host}`))?.name ?? null;
   } catch {
     return null;
   }

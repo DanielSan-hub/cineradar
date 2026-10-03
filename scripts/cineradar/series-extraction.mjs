@@ -33,7 +33,8 @@ const PLATFORMS = Object.freeze({
   "filmfestplatform.com": "FilmFestPlatform",
   "submittable.com": "Submittable",
   "filmchief.com": "FilmChief",
-  "festagent.com": "FestAgent",
+  // FestAgent is a directory (its "submit" route is a paid agency service):
+  // never a festival's submission link.
 });
 
 export function platformOf(url) {

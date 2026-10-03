@@ -78,10 +78,11 @@ jobs:
           MONTHLY_BUDGET_EUR: "5"
           USD_TO_EUR_RATE: "1"
           CLOUDFLARE_DAILY_NEURON_LIMIT: "9000"
-      # Festhome (robots.txt allows it) lists ~600 open festivals with their
-      # deadline calendars and own websites. Only new or changed festival cards
-      # are opened, one request per second; no LLM, no paid service.
-      - name: Read the Festhome platform calendar (no LLM)
+      # Festhome and FestAgent (robots.txt allows both) list open festivals
+      # with their deadline calendars and own websites. Only new or changed
+      # festival cards are opened, one request every 1-1.5 s; no LLM, no paid
+      # service. FestAgent facts always link back to FestAgent (its terms).
+      - name: Read the Festhome and FestAgent calendars (no LLM)
         if: always() && steps.guard.outputs.skip != 'true'
         continue-on-error: true
         run: node scripts/cineradar/harvest-platforms.mjs --apply
@@ -92,6 +93,8 @@ jobs:
           URL_VALIDATION_CONCURRENCY: "4"
           FESTHOME_LISTING_PAGES: "200"
           FESTHOME_DETAIL_LIMIT: "600"
+          FESTAGENT_LISTING_PAGES: "60"
+          FESTAGENT_DETAIL_LIMIT: "150"
           PLATFORM_TIME_BUDGET_SECONDS: "840"
       - name: Hunt deadlines on the calls' own Submit/Rules pages (no LLM)
         if: always() && steps.guard.outputs.skip != 'true'

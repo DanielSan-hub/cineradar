@@ -119,3 +119,47 @@ test("an open call without a date shows its platform and links there; dated call
   assert.equal(platformApplyUrl("javascript:alert(1)", "FilmFreeway"), null);
   assert.equal(platformApplyUrl("https://filmfreeway.com/KinoAthens", null), null);
 });
+
+test("FestAgent listing cards give name, own website, dates and the organizer-managed flag", async () => {
+  const { parseFestagentListing } = await import("../scripts/cineradar/platform-connectors.mjs");
+  const card = (id, name, extra) => `<div class="festival "\n     id="${id}">\n${extra.labels ?? ""}<div class="title-link">\n <a target="" href="/en/festivals/${id}">\n <img alt="x" />\n ${name}\n</a> </div>\n${extra.website ? `<div class="festival-website">\n <a target="_blank" rel="nofollow" href="${extra.website}">x</a>\n </div>` : ""}\n<div class="deadline-column">\n${extra.column}\n</div>\n</div>`;
+  const html = `<div id="pagination_entries_info">1 — 30 of 1521 festivals</div>`
+    + card("culver_fest", "Culver City Film Festival", { website: "http://culvercityfilmfestival.com/", column: `<p><span>Today</span><br><small class="text-gray deadline">\n October 03, 2026\n </small></p><p class="small text-gray after-next-deadlines">November 03, 2026<br /></p>` })
+    + card("tempus", "Tempus &amp; Co", { labels: `<div class="festival-label festival-label-managed">official</div>`, website: "https://tempus.example.org/", column: `<p>The submission period is over.</p>` });
+  const { total, cards } = parseFestagentListing(html);
+  assert.equal(total, 1521);
+  assert.deepEqual(cards.map((item) => [item.slug, item.name, item.website, item.dates, item.closed, item.managed]), [
+    ["culver_fest", "Culver City Film Festival", "http://culvercityfilmfestival.com/", ["2026-10-03", "2026-11-03"], false, false],
+    ["tempus", "Tempus & Co", "https://tempus.example.org/", [], true, true],
+  ]);
+});
+
+test("a FestAgent page gives the final deadline, the own website, never an application link", async () => {
+  const { festagentRawItem, finalFestagentDeadline, parseFestagentDeadlines } = await import("../scripts/cineradar/platform-connectors.mjs");
+  const item = (label, date) => `<li class="feed-item in-future"><div class="well"><div class="title">${label}</div><div class="date">${date}</div></div></li>`;
+  const html = `<meta property="og:title" content="IA en corto 2nd Edition - AI Short Film Festival"><span class="festival-label festival-label-managed">official</span>`
+    + `<div class="panel-heading">\n Dates &amp; Deadlines\n </div><div class="panel-body"><ul class="feed dates " data-toggle="tooltip">`
+    + item("Opening Date", "August 14, 2026") + item("Late Deadline", "October 04, 2026") + item("Extended Deadline", "October 18, 2026")
+    + item("Notifications", "October 19, 2026") + item("Event Dates", "20 — 24 October 2026")
+    + `</ul></div><p class="h3">Official Website</p>\n <p>\n <a target="_blank" rel="nofollow" class="website" href="http://www.iaencorto.com">iaencorto.com</a>\n </p>`;
+  const entries = parseFestagentDeadlines(html);
+  assert.deepEqual(entries.map((entry) => entry.label), ["Opening Date", "Late Deadline", "Extended Deadline", "Notifications"]);
+  assert.equal(finalFestagentDeadline(entries).date, "2026-10-18");
+  const raw = festagentRawItem({ page: { html, text: "", finalUrl: "https://festagent.com/en/festivals/ia-en-corto" }, now: NOW });
+  assert.equal(raw.deadline, "2026-10-18");
+  assert.equal(raw.deadline_evidence, "Extended Deadline October 18, 2026");
+  assert.equal(raw.official_url, "http://www.iaencorto.com");
+  assert.equal(raw.application_url, null);
+  assert.equal(raw.deadline_source_url, "https://festagent.com/en/festivals/ia-en-corto");
+  assert.deepEqual(raw.tags, ["platform:festagent", "festagent:ia-en-corto", "festagent:managed"]);
+  assert.equal(raw.series_evidence.deadline_method, "platform-calendar");
+});
+
+test("FestAgent and Festhome pages are named as the source of what they say", async () => {
+  const { dataSourceName, deadlinePlatform } = await import("../lib/opportunity-format.ts");
+  assert.equal(dataSourceName("https://festagent.com/en/festivals/x"), "FestAgent");
+  assert.equal(dataSourceName("https://filmmakers.festhome.com/festival/1"), "Festhome");
+  assert.equal(dataSourceName("https://example.org/"), null);
+  // FestAgent is a directory, never a festival's submission platform.
+  assert.equal(deadlinePlatform({ deadline: null, deadlineStatus: "unknown", tags: ["via-festagent"] }), null);
+});

@@ -10,6 +10,7 @@ import { basename } from "node:path";
 import { usageIdempotencyKey } from "./cost-control.mjs";
 import { ledgeredExaSearch } from "./exa.mjs";
 import { mapPool } from "./http.mjs";
+import { RESOLVER_EXCLUDE } from "./site-resolution.mjs";
 import {
   hostOf,
   isHeldOut,
@@ -90,8 +91,10 @@ if (apply) {
       idempotencyKey: usageIdempotencyKey(["site-resolution", entry.key, month]),
       operation: "site-resolution",
       text: `${entry.name} ${categoryHint(entry.row)} official website`,
-      numResults: 5,
-      excludeDomains: EXCLUDE,
+      // "instant" (USD 0.004, 10 results) inside Exa's free monthly credits.
+      type: "instant",
+      numResults: 10,
+      excludeDomains: [...new Set([...EXCLUDE, ...RESOLVER_EXCLUDE])],
       metadata: { query_family: "site-resolution" },
     }).catch((error) => ({ error: error.message }));
     if (result.error) return { status: "error" };

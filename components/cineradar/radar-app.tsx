@@ -43,7 +43,7 @@ import {
 } from "@/components/ui/sheet";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { mergeUniqueById } from "@/lib/opportunity-pagination.mjs";
-import { deadlineCountdown, deadlinePlatform, formatDeadline, formatMoney, platformApplyUrl, platformCountdown } from "@/lib/opportunity-format";
+import { dataSourceName, deadlineCountdown, deadlinePlatform, formatDeadline, formatMoney, platformApplyUrl, platformCountdown } from "@/lib/opportunity-format";
 import type {
   OpportunitiesPage,
   Opportunity,
@@ -659,7 +659,7 @@ function OpportunityLinks({ opportunity }: { opportunity: Opportunity }) {
   const links = [
     { label: "Official website", url: officialUrl },
     { label: platform && !opportunity.applicationUrlVerified ? `Apply on ${platform}` : "Apply", url: applicationUrl },
-    { label: "Source", url: sourceUrl },
+    { label: dataSourceName(sourceUrl) ? `Source: ${dataSourceName(sourceUrl)}` : "Source", url: sourceUrl },
   ].filter((link): link is { label: string; url: string } => Boolean(link.url));
 
   if (!links.length) return <span className="self-center text-sm text-slate-500">No verified link</span>;

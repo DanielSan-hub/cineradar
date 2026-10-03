@@ -18,8 +18,8 @@ import { isAiFilmText, scoreCallSignal } from "./call-signal.mjs";
 import { huntDeadline } from "./deadline-hunt.mjs";
 import { extractDeadline } from "./decision-fields.mjs";
 import { mapPool } from "./http.mjs";
-import { finalFesthomeDeadline, parseFesthomeDeadlines } from "./platform-connectors.mjs";
-import { seriesKey } from "./registry-seeds.mjs";
+import { finalFestagentDeadline, finalFesthomeDeadline, parseFestagentDeadlines, parseFesthomeDeadlines } from "./platform-connectors.mjs";
+import { hostOf, seriesKey } from "./registry-seeds.mjs";
 import { createRobotsChecker } from "./robots.mjs";
 import { nameFitsHost, platformOf, seriesEvidence } from "./series-extraction.mjs";
 import { supabase } from "./supabase.mjs";
@@ -203,7 +203,10 @@ async function checkOfficialPage(row) {
     // calendar on Festhome (kept by the organizer, who links its own site from
     // it) is re-read with the platform's parser.
     const datesUrl = row.deadline_source_url;
-    const platformCalendar = platformOf(datesUrl) === "Festhome";
+    // FestAgent calendars count only when the organizer maintains the page
+    // ("managed"); editor-kept pages need the official site's own date.
+    const festagentCalendar = /(?:^|\.)festagent\.com$/i.test(hostOf(datesUrl) ?? "");
+    const platformCalendar = platformOf(datesUrl) === "Festhome" || festagentCalendar;
     // A call's own page (not a homepage) that prints another deadline wins
     // over a date read elsewhere on the site (a festival's general Submit page).
     const ownDates = isSiteRoot(page.finalUrl) ? null : extractDeadline(text, { title: row.title });
@@ -214,7 +217,10 @@ async function checkOfficialPage(row) {
       const datesPage = await fetchPage(datesUrl).catch(() => null);
       if (datesPage) {
         datesText = datesPage.text ?? "";
-        const calendar = platformCalendar ? finalFesthomeDeadline(parseFesthomeDeadlines(datesText)) : null;
+        const calendar = !platformCalendar ? null
+          : festagentCalendar
+            ? (/festival-label-managed/.test(datesPage.html ?? "") ? finalFestagentDeadline(parseFestagentDeadlines(datesPage.html)) : null)
+            : finalFesthomeDeadline(parseFesthomeDeadlines(datesText));
         deadlineEvidenceFound = platformCalendar
           ? sameDate(calendar && { deadline: calendar.date })
           : sameDate(huntDeadline(datesPage, { title: row.title }));
