@@ -76,8 +76,10 @@ export function createRobotsChecker({ fetchImpl = fetch, userAgent, timeoutMs = 
       if (!response.ok) return { unreachable: true, rules: [], crawlDelay: null };
       const text = (await response.text()).slice(0, 512_000);
       return parseRobots(text);
-    } catch {
-      return { unreachable: true, rules: [], crawlDelay: null };
+    } catch (error) {
+      // A host name that does not resolve is a lapsed domain, not a hiccup.
+      const dns = /^(?:ENOTFOUND|EAI_NONAME)$/.test(String(error?.cause?.code ?? error?.code ?? ""));
+      return { unreachable: true, dns, rules: [], crawlDelay: null };
     }
   }
   return async function check(url) {
@@ -89,7 +91,7 @@ export function createRobotsChecker({ fetchImpl = fetch, userAgent, timeoutMs = 
     }
     if (!cache.has(parsed.origin)) cache.set(parsed.origin, load(parsed.origin));
     const robots = await cache.get(parsed.origin);
-    if (robots.unreachable) return { allowed: false, reason: "ROBOTS_UNREACHABLE" };
+    if (robots.unreachable) return { allowed: false, reason: robots.dns ? "DNS_NOT_FOUND" : "ROBOTS_UNREACHABLE" };
     const allowed = isPathAllowed(robots, `${parsed.pathname}${parsed.search}`);
     return { allowed, reason: allowed ? null : "ROBOTS_DISALLOWED", crawlDelay: robots.crawlDelay };
   };

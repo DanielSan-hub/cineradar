@@ -311,10 +311,15 @@ try {
     if (!permission.allowed) {
       gate.robotsBlocked += 1;
       recordRejection(metrics, permission.reason);
-      // Unreachable robots.txt is transient; an explicit disallow is not.
-      const blocked = permission.reason !== "ROBOTS_UNREACHABLE";
+      // Unreachable robots.txt is transient; an explicit disallow is not. A
+      // host name that fails to resolve on two checks in a row is a lapsed
+      // domain: it leaves the rotation (DEAD_DOMAIN; the name resolver may
+      // find the series' new site).
+      const deadDomain = permission.reason === "DNS_NOT_FOUND" && Number(source.consecutive_failures ?? 0) >= 1
+        && /DNS_NOT_FOUND/.test(String(source.health_message ?? ""));
+      const blocked = deadDomain || !["ROBOTS_UNREACHABLE", "DNS_NOT_FOUND"].includes(permission.reason);
       await updateSource(source, blocked
-        ? { checkedAt: startedAt, blocked: true, reason: permission.reason }
+        ? { checkedAt: startedAt, blocked: true, reason: deadDomain ? "DEAD_DOMAIN" : permission.reason }
         : { checkedAt: startedAt, failed: true, error: permission.reason });
       await recordAttempt(source, {
         status: blocked ? "blocked" : "failed",

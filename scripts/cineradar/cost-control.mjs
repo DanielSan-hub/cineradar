@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { config } from "./config.mjs";
 import { supabase } from "./supabase.mjs";
 
-const PRICING_VERSION = "2026-09-23";
+const PRICING_VERSION = "2026-10-03";
 const CLOUDFLARE_PRICING = Object.freeze({
   "@cf/meta/llama-3.1-8b-instruct-fp8-fast": Object.freeze({
     inputUsdPerMillion: 0.045,
@@ -120,7 +120,20 @@ export function estimateGroqUsage(
   };
 }
 
-export function estimateExaSearch({ costDollars } = {}) {
+// Exa /search list prices (2026): the base covers up to 10 results; each
+// result above 10 and each AI summary add USD 0.001. Text and highlights
+// returned inside /search are included.
+const EXA_SEARCH_BASE_USD = Object.freeze({ instant: 0.004, fast: 0.007, auto: 0.007, "deep-lite": 0.012, deep: 0.012, "deep-reasoning": 0.015 });
+
+/** List price of one Exa /search request of this shape. */
+export function exaListPriceUsd({ type = "auto", numResults = 10, summary = false } = {}) {
+  const base = EXA_SEARCH_BASE_USD[type];
+  if (base === undefined) throw new Error(`No Exa price for search type ${type}`);
+  const results = Math.max(1, Math.min(100, Math.trunc(Number(numResults) || 10)));
+  return Number((base + Math.max(0, results - 10) * 0.001 + (summary ? results * 0.001 : 0)).toFixed(6));
+}
+
+export function estimateExaSearch({ costDollars } = {}, shape = {}) {
   let costUsd = Number(costDollars);
   if (!Number.isFinite(costUsd) && costDollars && typeof costDollars === "object") {
     costUsd = Number(costDollars.total);
@@ -131,7 +144,7 @@ export function estimateExaSearch({ costDollars } = {}) {
         .reduce((total, value) => total + value, 0);
     }
   }
-  if (!Number.isFinite(costUsd) || costUsd < 0) costUsd = 0.007;
+  if (!Number.isFinite(costUsd) || costUsd < 0) costUsd = exaListPriceUsd(shape);
   return {
     searches: 1,
     cost_usd: Number(costUsd.toFixed(8)),
@@ -140,12 +153,14 @@ export function estimateExaSearch({ costDollars } = {}) {
   };
 }
 
-export function estimateExaReservation() {
+export function estimateExaReservation(shape = {}) {
+  // At least the historical flat reservation, never less than the list price.
+  const costUsd = Math.max(EXA_SEARCH_RESERVATION_USD, exaListPriceUsd(shape));
   return {
     searches: 1,
-    cost_usd: EXA_SEARCH_RESERVATION_USD,
+    cost_usd: costUsd,
     cost_eur: Number(
-      (EXA_SEARCH_RESERVATION_USD * config.usdToEurRate).toFixed(8),
+      (costUsd * config.usdToEurRate).toFixed(8),
     ),
     pricing_version: PRICING_VERSION,
   };

@@ -44,6 +44,10 @@ export function cleanSecret(value) {
 
 export const config = {
   exaApiKey: process.env.EXA_API_KEY,
+  // Tavily's free plan: 1,000 credits a month, no card; 432 when used up.
+  // The pipeline stops on its own at TAVILY_MONTHLY_CREDIT_CAP.
+  tavilyApiKey: cleanSecret(process.env.TAVILY_API_KEY),
+  tavilyMonthlyCreditCap: boundedNumber("TAVILY_MONTHLY_CREDIT_CAP", 900, { min: 0, max: 1000, integer: true }),
   ingestUrl: process.env.CINERADAR_INGEST_URL,
   ingestSecret: process.env.INGEST_SECRET,
   supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL,

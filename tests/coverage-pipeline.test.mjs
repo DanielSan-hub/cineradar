@@ -96,6 +96,15 @@ test("robots checker caches per origin and fails closed on server errors", async
   assert.equal((await check("https://b.test/anything")).allowed, true);
   assert.deepEqual(await check("https://c.test/"), { allowed: false, reason: "ROBOTS_UNREACHABLE" });
   assert.equal(calls.filter((url) => url.startsWith("https://a.test")).length, 1);
+  // A host name that does not resolve is reported as such (a lapsed domain).
+  const dead = createRobotsChecker({
+    fetchImpl: async () => {
+      const error = new TypeError("fetch failed");
+      error.cause = { code: "ENOTFOUND" };
+      throw error;
+    },
+  });
+  assert.deepEqual(await dead("https://gone.test/"), { allowed: false, reason: "DNS_NOT_FOUND" });
 });
 
 test("series keys are edition-agnostic", () => {

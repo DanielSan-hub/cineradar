@@ -48,6 +48,7 @@ import {
 import { fetchPageOrRender } from "./browser-render.mjs";
 import { huntLinks } from "./deadline-hunt.mjs";
 import { createRobotsChecker } from "./robots.mjs";
+import { EXA_NO_CHARGE, exaIsExhausted, markExaExhausted } from "./exa.mjs";
 import { festhomeRawItem } from "./platform-connectors.mjs";
 import {
   combinedSeriesPage,
@@ -176,9 +177,11 @@ async function startDiscoveryAttempt(query) {
 }
 
 async function searchExa(query, resultLimit) {
+  // Exa answered 402 earlier in this run: the free monthly credits are used.
+  if (exaIsExhausted()) return { query, results: [], attemptId: null, costEur: 0 };
   incrementMetric(metrics, "queries");
   const attempt = await startDiscoveryAttempt(query);
-  const reserved = estimateExaReservation();
+  const reserved = estimateExaReservation({ type: "auto", numResults: resultLimit });
   let reservation;
   try {
     reservation = await reserveProviderUsage({
@@ -231,7 +234,9 @@ async function searchExa(query, resultLimit) {
     });
     const body = await response.json().catch(() => null);
     if (!response.ok || !body) {
-      const definiteNoCharge = [400, 401, 403].includes(response.status);
+      // 402 (credits used up), 429 and validation errors are never billed.
+      const definiteNoCharge = EXA_NO_CHARGE.has(response.status);
+      if (response.status === 402) markExaExhausted();
       await finalizeProviderUsage(reservation.event_id, {
         status: definiteNoCharge ? "released" : "uncertain",
         usageUnits: { searches: 1 },
@@ -249,7 +254,7 @@ async function searchExa(query, resultLimit) {
       });
       throw new Error(`Exa ${response.status}`);
     }
-    const actual = estimateExaSearch(body);
+    const actual = estimateExaSearch(body, { type: "auto", numResults: resultLimit });
     await finalizeProviderUsage(reservation.event_id, {
       status: "succeeded",
       usageUnits: {
