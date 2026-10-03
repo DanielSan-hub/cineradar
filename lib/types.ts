@@ -15,7 +15,7 @@ export type OpportunityCategory =
   | "Advertising competition";
 
 export type ReviewDecision = "pending" | "approved" | "rejected" | "archived";
-export type ReviewView = "human" | "pending" | "approved" | "rejected";
+export type ReviewView = "human" | "pending" | "team" | "approved" | "rejected";
 
 export type AiPolicy = "allowed" | "required" | "restricted" | "unclear";
 export type OpportunitySortMode = "urgent" | "newest" | "prize";

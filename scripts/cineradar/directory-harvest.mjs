@@ -9,7 +9,8 @@ import { canonicalizeUrl } from "./web-validation.mjs";
 // Never useful as a call's own page: social profiles, link shorteners, forms,
 // media, generic infrastructure.
 const NON_OFFICIAL_HOSTS = [
-  "facebook.com", "instagram.com", "x.com", "twitter.com", "youtube.com", "youtu.be",
+  // Submission platforms are never a festival's own site (Festhome data is team-only).
+  "festhome.com", "facebook.com", "instagram.com", "x.com", "twitter.com", "youtube.com", "youtu.be",
   "linkedin.com", "tiktok.com", "vimeo.com", "threads.net", "t.me", "discord.gg",
   "discord.com", "reddit.com", "pinterest.com", "wikipedia.org", "web.archive.org",
   "bit.ly", "linktr.ee", "forms.gle", "docs.google.com", "google.com", "goo.gl",

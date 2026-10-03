@@ -1,6 +1,6 @@
 import "server-only";
 
-import { isUuid } from "@/lib/review-workflow.mjs";
+import { isTeamOnlyRecord, isUuid } from "@/lib/review-workflow.mjs";
 import {
   mapOpportunityRecord,
   supabaseRequest,
@@ -110,6 +110,13 @@ export type ApplyReviewResult =
  * ChatGPT Sites identity, never from form input.
  */
 export async function applyReview(input: ApplyReviewInput): Promise<ApplyReviewResult> {
+  // Festhome data is for the team only: such a record is never published.
+  if (input.action === "approve") {
+    const rows = await readJson(`opportunities?select=tags,source_url,deadline_source_url&id=eq.${input.opportunityId}&limit=1`).catch(() => []);
+    if (rows[0] && isTeamOnlyRecord(rows[0])) {
+      return { ok: false, error: "This record rests on Festhome data, which is for the team only and is never published.", blockers: ["team-only-source"] };
+    }
+  }
   try {
     const response = await supabaseRequest(
       "rpc/apply_opportunity_review",

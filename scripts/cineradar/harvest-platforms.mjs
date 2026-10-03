@@ -85,9 +85,9 @@ const PLATFORMS = {
     websitesFromListing: true,
   },
 };
-// Festhome is never read (its terms forbid automated collection without
-// written consent); its entry stays for the day consent is granted.
-const selected = String(process.env.PLATFORMS ?? "festagent").split(",").map((value) => value.trim()).filter((key) => PLATFORMS[key]);
+// Festhome data is team-only (owner decision 2026-10-03): its records are
+// never published (isTeamOnlyRecord), as its terms forbid republication.
+const selected = String(process.env.PLATFORMS ?? "festhome,festagent").split(",").map((value) => value.trim()).filter((key) => PLATFORMS[key]);
 
 async function platformSource(platform) {
   const [row] = await supabase(`sources?select=id,url,adapter_config&url=eq.${encodeURIComponent(platform.sourceUrl)}&limit=1`);

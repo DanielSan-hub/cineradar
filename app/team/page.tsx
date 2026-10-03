@@ -30,6 +30,7 @@ import type { Opportunity, ReviewView } from "@/lib/types";
 const VIEW_LABELS: Record<ReviewView, string> = {
   human: "Needs you",
   pending: "All pending (automatic)",
+  team: "Team only (Festhome)",
   approved: "Published",
   rejected: "Rejected & archived",
 };

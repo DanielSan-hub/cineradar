@@ -228,6 +228,13 @@ Deploy target for the UI (FestAgent/EU attribution, platform badges): latest
 main (`4ef0cac` or later), archive `work/deploy-4ef0cac-20261003.tar.gz`.
 Update 2026-10-03 (evening; owner sent a source survey PDF and the example
 "AI Horizons" from ticonsiglio.com):
+- UPDATE (same evening, owner decision): Festhome is read again for the TEAM
+  ONLY. Its records are flagged `team-only` (triage), listed in the /team tab
+  "Team only (Festhome)", and can never be published: auto-review keeps them
+  on watch, publicationBlockers adds "team-only-source" and the server action
+  refuses to approve them (`isTeamOnlyRecord` in lib/review-workflow.mjs;
+  the SQL gate does not know this rule). The terms risk below was explained
+  and accepted by the owner. Superseded text follows:
 - FESTHOME IS BLOCKED. Its Terms of Use (filmmakers.festhome.com/terms-of-use)
   forbid "any systematic or automated data collection activities (including
   ... scraping, data mining, data extraction and data harvesting)" without

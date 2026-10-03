@@ -49,12 +49,14 @@ import { fetchPageOrRender } from "./browser-render.mjs";
 import { huntLinks } from "./deadline-hunt.mjs";
 import { createRobotsChecker } from "./robots.mjs";
 import { EXA_NO_CHARGE, exaIsExhausted, markExaExhausted } from "./exa.mjs";
+import { festhomeRawItem } from "./platform-connectors.mjs";
 import {
   combinedSeriesPage,
   isSeriesSource,
   pageHasPlatformLink,
   pageHasSubmissionLink,
   NEWS_PATH,
+  platformOf,
   seriesEvidence,
   seriesName,
   seriesRawItem,
@@ -110,7 +112,9 @@ async function processSeriesItem(item) {
     const pages = [...subpages, home];
     const evidence = subpages.length ? seriesEvidence(pages, { title: name }) : quick;
     // A festival page on Festhome carries its own structured deadline calendar.
-    const raw = seriesRawItem({ source, home, pages, evidence });
+    // A festival page on Festhome carries its deadline calendar (team-only data).
+    const raw = (platformOf(home.finalUrl) === "Festhome" ? festhomeRawItem({ page: home, card: { name } }) : null)
+      ?? seriesRawItem({ source, home, pages, evidence });
     if (!raw) {
       if (item.ai || Number(source?.priority ?? 3) <= 2) return { needsLlm: true, item };
       incrementMetric(metrics, "series_no_evidence");

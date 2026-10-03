@@ -78,12 +78,12 @@ jobs:
           MONTHLY_BUDGET_EUR: "5"
           USD_TO_EUR_RATE: "1"
           CLOUDFLARE_DAILY_NEURON_LIMIT: "9000"
-      # FestAgent lists open festivals with their deadline calendars and own
-      # websites; its terms allow use with a link to the source, which every
-      # FestAgent fact keeps. Only new or changed cards are opened, one
-      # request every 1.5 s; no LLM, no paid service. Festhome is never read:
-      # its terms forbid automated collection without written consent.
-      - name: Read the FestAgent calendar (no LLM)
+      # FestAgent (public, with a link to the source) and Festhome (team only:
+      # its records are never published, owner decision 2026-10-03) list
+      # open festivals with their deadline calendars and own websites. Only
+      # new or changed cards are opened, 1-1.5 s apart; no LLM, no paid
+      # service.
+      - name: Read the FestAgent and Festhome calendars (no LLM)
         if: always() && steps.guard.outputs.skip != 'true'
         continue-on-error: true
         run: node scripts/cineradar/harvest-platforms.mjs --apply
@@ -94,7 +94,9 @@ jobs:
           URL_VALIDATION_CONCURRENCY: "4"
           FESTAGENT_LISTING_PAGES: "60"
           FESTAGENT_DETAIL_LIMIT: "150"
-          PLATFORMS: "festagent"
+          PLATFORMS: "festhome,festagent"
+          FESTHOME_LISTING_PAGES: "200"
+          FESTHOME_DETAIL_LIMIT: "300"
           PLATFORM_TIME_BUDGET_SECONDS: "840"
       # Creative Europe MEDIA calls from the EU Funding & Tenders Portal's
       # public search API (free, robots.txt allows it; reuse under CC BY 4.0).

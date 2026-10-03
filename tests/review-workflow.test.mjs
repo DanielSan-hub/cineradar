@@ -245,5 +245,26 @@ test("review migration keeps the gate human-only and the audit append-only", asy
   // Blocker codes emitted by the latest SQL definition must all have UI messages.
   const gate = await readFile("supabase/migrations/202609280001_publication_gate_past_deadline.sql", "utf8");
   const sqlCodes = [...gate.matchAll(/array_append\(blockers, '([a-z-]+)'\)/g)].map((match) => match[1]);
-  assert.deepEqual([...new Set(sqlCodes)].sort(), Object.keys(BLOCKER_MESSAGES).sort());
+  // "team-only-source" is enforced by the app (form and server action), not
+  // by the SQL gate: Festhome data never reaches the review RPC as an approval.
+  const appOnly = new Set(["team-only-source"]);
+  assert.deepEqual([...new Set(sqlCodes)].sort(), Object.keys(BLOCKER_MESSAGES).filter((code) => !appOnly.has(code)).sort());
+});
+
+test("Festhome data is team-only: flagged for the team tab and never publishable", async () => {
+  const { isTeamOnlyRecord, publicationBlockers, reviewViewFilter } = await import("../lib/review-workflow.mjs");
+  const { triageRecord } = await import("../lib/review-triage.mjs");
+  const { autoReviewDecision } = await import("../lib/auto-review.mjs");
+  const row = {
+    title: "Prague Film Festival", organizer: "Prague Film Festival", status: "verified", deadline: "2027-01-28T23:59:59Z", deadline_status: "confirmed",
+    official_url: "https://prahafilmfestival.com/", official_url_status: "verified", source_type: "community",
+    source_url: "https://filmmakers.festhome.com/festival/1", deadline_source_url: "https://filmmakers.festhome.com/festival/1", tags: ["platform:festhome"],
+  };
+  assert.equal(isTeamOnlyRecord(row), true);
+  assert.ok(publicationBlockers(row, { now: Date.parse("2026-10-03T10:00:00Z") }).includes("team-only-source"));
+  assert.ok(triageRecord(row, { now: Date.parse("2026-10-03T10:00:00Z") }).flags.includes("team-only"));
+  assert.ok(!triageRecord(row, { now: Date.parse("2026-10-03T10:00:00Z") }).flags.includes("publishable"));
+  assert.equal(autoReviewDecision(row, { now: Date.parse("2026-10-03T10:00:00Z"), page: { ok: true, callSignal: true, deadlineEvidenceFound: true } }).decision, "watch");
+  assert.equal(reviewViewFilter("team", { triage: true }).triage_flags, "cs.{team-only}");
+  assert.equal(isTeamOnlyRecord({ ...row, source_url: "https://prahafilmfestival.com/", deadline_source_url: null, tags: [] }), false);
 });

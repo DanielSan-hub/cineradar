@@ -29,7 +29,7 @@ const columns = await supportsTriageColumns();
 const rows = [];
 for (let offset = 0; ; offset += 1000) {
   const batch = await supabase(
-    `opportunities?select=${columns ? "readiness_score,triage_flags," : ""}id,title,status,deadline,deadline_status,official_url,official_url_status,source_type,source_url_status,organizer,has_conflict,max_runtime_minutes,ai_policy,entry_fee_amount,application_url,eligibility,confidence,review_reason,updated_at&review_decision=eq.pending&order=id.asc&limit=1000&offset=${offset}`,
+    `opportunities?select=${columns ? "readiness_score,triage_flags," : ""}id,title,status,tags,source_url,deadline_source_url,deadline,deadline_status,official_url,official_url_status,source_type,source_url_status,organizer,has_conflict,max_runtime_minutes,ai_policy,entry_fee_amount,application_url,eligibility,confidence,review_reason,updated_at&review_decision=eq.pending&order=id.asc&limit=1000&offset=${offset}`,
   );
   rows.push(...batch);
   if (batch.length < 1000) break;

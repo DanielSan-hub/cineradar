@@ -148,8 +148,8 @@ test("a year-less closing date survives normalization only from the year rule", 
 test("FilmFreeway is never requested, even to validate a link or follow a redirect", async () => {
   assert.equal(isAutomationBlockedUrl("https://filmfreeway.com/X"), true);
   assert.equal(isAutomationBlockedUrl("https://www.filmfreeway.com/X"), true);
-  // Festhome too: its terms forbid automated collection without consent.
-  assert.equal(isAutomationBlockedUrl("https://filmmakers.festhome.com/festival/1"), true);
+  // Festhome is read (team-only data, never published), FilmFreeway never.
+  assert.equal(isAutomationBlockedUrl("https://filmmakers.festhome.com/festival/1"), false);
   assert.equal(isAutomationBlockedUrl("https://example.org/x"), false);
   const requested = [];
   const result = await validateUrl("https://filmfreeway.com/BrooklynFilmFestival", {
