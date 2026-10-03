@@ -66,6 +66,8 @@ const PLATFORMS = {
     rawItem: festhomeRawItem,
     // Only the websites of festivals opened in detail are known.
     websitesFromListing: false,
+    // Owner, 2026-10-03: Festhome is read once a week at most.
+    intervalDays: number("FESTHOME_INTERVAL_DAYS", 7),
   },
   festagent: {
     name: "FestAgent",
@@ -83,6 +85,7 @@ const PLATFORMS = {
     // Every card names the festival's own website: registered for free,
     // including closed festivals (their next edition is announced there).
     websitesFromListing: true,
+    intervalDays: number("FESTAGENT_INTERVAL_DAYS", 1),
   },
 };
 // Festhome data is team-only (owner decision 2026-10-03): its records are
@@ -90,7 +93,7 @@ const PLATFORMS = {
 const selected = String(process.env.PLATFORMS ?? "festhome,festagent").split(",").map((value) => value.trim()).filter((key) => PLATFORMS[key]);
 
 async function platformSource(platform) {
-  const [row] = await supabase(`sources?select=id,url,adapter_config&url=eq.${encodeURIComponent(platform.sourceUrl)}&limit=1`);
+  const [row] = await supabase(`sources?select=id,url,adapter_config,last_checked_at&url=eq.${encodeURIComponent(platform.sourceUrl)}&limit=1`);
   if (row || !apply) return row ?? { id: null, url: platform.sourceUrl, adapter_config: {} };
   // The connector's own registry row (holds its listing state). Disabled: the
   // monitor never reads it, only this connector does.
@@ -154,6 +157,12 @@ for (const key of selected) {
     continue;
   }
   const source = await platformSource(platform);
+  // Each platform is read at most once per its interval (Festhome: 7 days).
+  const lastRead = Date.parse(source?.last_checked_at ?? "");
+  if (Number.isFinite(lastRead) && now - lastRead < platform.intervalDays * 86_400_000 - 3_600_000) {
+    summary.skipped = `read ${new Date(lastRead).toISOString().slice(0, 10)}; next after ${platform.intervalDays} days`;
+    continue;
+  }
   const state = { ...(source?.adapter_config?.platform_state ?? {}) };
 
   // 1. Listing: open festivals first, sorted by the next deadline.

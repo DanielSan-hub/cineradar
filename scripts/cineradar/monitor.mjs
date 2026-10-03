@@ -56,6 +56,14 @@ function isBlockedHost(url) {
 
 // Pages with no actionable call are settled here, for free, so discovery only
 // spends extraction effort on pages that announce a submission window.
+function hostOfUrl(url) {
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
 async function gateCallSignal(page, observation, source) {
   if (page.notModified || observation.alreadyProcessed) return;
   const lenient = isAiSource(source) || isAiFilmText(page.text ?? "");
@@ -282,7 +290,11 @@ try {
     `sources?select=*&enabled=eq.true&priority=lt.3&or=(next_check_at.is.null,next_check_at.lte.${dueAt})&order=priority.asc,next_check_at.asc.nullsfirst&limit=1000`,
   );
   const allSources = [...new Map([...overdue, ...priorityDue].map((source) => [source.id, source])).values()];
-  const sources = selectDueSources(allSources, {
+  // Festhome pages are read once a week at most (owner, 2026-10-03).
+  const weekAgo = Date.now() - 7 * 86_400_000;
+  const allowedSources = allSources.filter((source) => !/(?:^|\.)festhome\.com$/i.test(hostOfUrl(source.url))
+    || !source.last_checked_at || Date.parse(source.last_checked_at) < weekAgo);
+  const sources = selectDueSources(allowedSources, {
     now: new Date(),
     limit: config.sourceRefreshLimit,
   });
