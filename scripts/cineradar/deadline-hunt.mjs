@@ -13,7 +13,7 @@ const DAY = 86_400_000;
 const HUNT_LINK = /\b(?:submit\w*|submission\w*|apply|application\w*|entr(?:y|ies)|enter|rules|regulations?|guidelines|terms|deadlines?|dates|timeline|calendar|call|open[- ]?call|how[- ]to|participat\w*|register|registration|faq|eligib\w*|bases|reglamento|convocatoria|inscripci\w*|bando|regolamento|iscrizion\w*|partecipa\w*|scadenz\w*|einreich\w*|teilnahme\w*|ausschreibung|appel|candidature\w*|r[eè]glement|inscription\w*|edital|inscri[cç][oõ]es)\b|応募|募集|締切|공모|접수|报名|征集/iu;
 const HUNT_NEGATIVE = /\b(?:winners?|jury|juries|archive|past|press|news|blog|shop|store|tickets?|program(?:me)?|schedule|team|about|contact|privacy|cookies?|login|sign[- ]?in|account|donate|sponsor\w*|partners?)\b|\.(?:pdf|jpe?g|png|zip|docx?)(?:[?#]|$)/iu;
 // Submission platforms we may read (FilmFreeway blocks automation).
-const PLATFORMS = ["festhome.com", "shortfilmdepot.com", "filmfestplatform.com", "submittable.com", "clickforfestivals.com", "movibeta.com", "filmchief.com"];
+const PLATFORMS = ["shortfilmdepot.com", "filmfestplatform.com", "submittable.com", "clickforfestivals.com", "movibeta.com", "filmchief.com"];
 
 function baseDomain(host) {
   const labels = String(host ?? "").toLowerCase().replace(/^www\./, "").split(".").filter(Boolean);
@@ -52,6 +52,8 @@ export function huntLinks(linkRecords, { pageUrl, limit = 3 } = {}) {
       }
       const label = `${path.replace(/[-_/]+/g, " ")} ${record.text ?? ""}`;
       if (!HUNT_LINK.test(label) || HUNT_NEGATIVE.test(label)) return null;
+      // Documents are not pages to read (the label check misses ".pdf Guidelines").
+      if (/\.(?:pdf|jpe?g|png|zip|docx?)$/i.test(path)) return null;
       const key = String(record.url).replace(/[#?].*$/, "").replace(/\/$/, "");
       if (seen.has(key)) return null;
       seen.add(key);

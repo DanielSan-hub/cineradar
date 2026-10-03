@@ -28,10 +28,11 @@ test("the hunt opens the call's own rules/submit pages, never FilmFreeway or new
     { url: "https://fest.example/guidelines.pdf", text: "Guidelines" },
   ], { pageUrl: "https://www.fest.example/" });
   const urls = links.map((link) => link.url);
-  assert.equal(urls.length, 3);
+  // Festhome is never opened either (its terms forbid automated collection).
+  assert.equal(urls.length, 2);
   assert.ok(urls.includes("https://fest.example/submit/"));
   assert.ok(urls.includes("https://fest.example/rules-and-regulations"));
-  assert.ok(!urls.some((url) => /filmfreeway|news|other\.example|\.pdf/.test(url)));
+  assert.ok(!urls.some((url) => /filmfreeway|festhome|news|other\.example|\.pdf/.test(url)));
   assert.equal(isApplyPage("https://fest.example/submit/"), true);
   assert.equal(isApplyPage("https://fest.example/rules"), false);
 });

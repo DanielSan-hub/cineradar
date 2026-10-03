@@ -17,7 +17,13 @@ export const PLATFORM_HOSTS = Object.freeze([
   "facebook.com", "instagram.com", "x.com", "twitter.com", "youtube.com",
   "linkedin.com", "tiktok.com", "wikipedia.org", "web.archive.org",
 ]);
-export const BLOCKED_HOSTS = Object.freeze(["filmfreeway.com"]);
+// Hosts never requested by the pipeline. FilmFreeway blocks automated
+// clients; Festhome's Terms of Use forbid "any systematic or automated data
+// collection activities (including ... scraping, data mining, data
+// extraction and data harvesting)" without its written consent (checked
+// 2026-10-03). Links to them found on organizers' own pages are kept,
+// never fetched.
+export const BLOCKED_HOSTS = Object.freeze(["filmfreeway.com", "festhome.com"]);
 
 const STOP_WORDS = /\b(?:the|festival|film|films|international|intl|of|and|de|du|des|la|le|les|di|del|della|der|die|das|und|awards?|competition|edition|annual|fest)\b/g;
 

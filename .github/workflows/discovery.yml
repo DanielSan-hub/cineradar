@@ -78,11 +78,12 @@ jobs:
           MONTHLY_BUDGET_EUR: "5"
           USD_TO_EUR_RATE: "1"
           CLOUDFLARE_DAILY_NEURON_LIMIT: "9000"
-      # Festhome and FestAgent (robots.txt allows both) list open festivals
-      # with their deadline calendars and own websites. Only new or changed
-      # festival cards are opened, one request every 1-1.5 s; no LLM, no paid
-      # service. FestAgent facts always link back to FestAgent (its terms).
-      - name: Read the Festhome and FestAgent calendars (no LLM)
+      # FestAgent lists open festivals with their deadline calendars and own
+      # websites; its terms allow use with a link to the source, which every
+      # FestAgent fact keeps. Only new or changed cards are opened, one
+      # request every 1.5 s; no LLM, no paid service. Festhome is never read:
+      # its terms forbid automated collection without written consent.
+      - name: Read the FestAgent calendar (no LLM)
         if: always() && steps.guard.outputs.skip != 'true'
         continue-on-error: true
         run: node scripts/cineradar/harvest-platforms.mjs --apply
@@ -91,10 +92,9 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           HTTP_TIMEOUT_MS: "12000"
           URL_VALIDATION_CONCURRENCY: "4"
-          FESTHOME_LISTING_PAGES: "200"
-          FESTHOME_DETAIL_LIMIT: "600"
           FESTAGENT_LISTING_PAGES: "60"
           FESTAGENT_DETAIL_LIMIT: "150"
+          PLATFORMS: "festagent"
           PLATFORM_TIME_BUDGET_SECONDS: "840"
       # Creative Europe MEDIA calls from the EU Funding & Tenders Portal's
       # public search API (free, robots.txt allows it; reuse under CC BY 4.0).
@@ -147,8 +147,8 @@ jobs:
           HARVEST_DIRECTORY_LIMIT: "25"
           HARVEST_PAGES_PER_DIRECTORY: "40"
           HARVEST_TIME_BUDGET_SECONDS: "300"
-      # Own websites for calls known only by name (Festhome records, pending
-      # records on someone else's page): Tavily's free plan first (capped at
+      # Own websites for calls known only by name (pending records on
+      # someone else's page, lapsed Wikidata domains): Tavily's free plan first (capped at
       # 900 of its 1,000 monthly credits), Exa "instant" inside its free
       # credits as fallback. Only sources are registered; no fact is copied.
       - name: Resolve own websites for names (free search tiers)
@@ -167,5 +167,4 @@ jobs:
           HTTP_TIMEOUT_MS: "12000"
           RESOLVE_SEARCH_LIMIT: "15"
           RESOLVE_EXA_LIMIT: "15"
-          RESOLVE_FESTHOME_LIMIT: "40"
           RESOLVE_TIME_BUDGET_SECONDS: "420"

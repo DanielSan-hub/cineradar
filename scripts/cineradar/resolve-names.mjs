@@ -4,8 +4,7 @@
 // the database only; the owner's datasets are never read here.
 //
 // Inputs, in order:
-//   1. Festhome records without an own site: the website the festival
-//      declares on its Festhome page is read again (free, no search).
+//   1. (none: Festhome pages are never read, see registry-seeds BLOCKED_HOSTS)
 //   2. Pending records with a known name whose official page is missing or
 //      sits on another organization's site (directory, article).
 // Search: Tavily first (free plan, credit cap), then Exa "instant" (free
@@ -19,7 +18,6 @@
 import { config } from "./config.mjs";
 import { usageIdempotencyKey } from "./cost-control.mjs";
 import { exaIsExhausted, ledgeredExaSearch } from "./exa.mjs";
-import { platformWebsite } from "./platform-connectors.mjs";
 import { hostOf, isPlatformHost, pickOfficialSite, seriesKey } from "./registry-seeds.mjs";
 import { hostNamesSeries, pageNamesSeries, RESOLVER_EXCLUDE, resolvedSourceRow, resolverName, resolverQuery, siteRoot } from "./site-resolution.mjs";
 import { createRobotsChecker } from "./robots.mjs";
@@ -35,12 +33,10 @@ const number = (name, fallback) => {
 };
 const SEARCH_LIMIT = number("RESOLVE_SEARCH_LIMIT", 15);
 const EXA_LIMIT = number("RESOLVE_EXA_LIMIT", 15);
-const FESTHOME_LIMIT = number("RESOLVE_FESTHOME_LIMIT", 40);
 const RETRY_DAYS = number("RESOLVE_RETRY_DAYS", 120);
 const deadlineAt = Date.now() + number("RESOLVE_TIME_BUDGET_SECONDS", 420) * 1000;
 const UA = "CineRadarBot/2.0 (+https://cineradar.danielmaker.chatgpt.site)";
 const robots = createRobotsChecker({ userAgent: UA });
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function all(path) {
   const rows = [];
@@ -53,8 +49,7 @@ async function all(path) {
 
 const summary = {
   mode: apply ? "apply" : "dry-run",
-  festhomeChecked: 0, festhomeSites: 0, festhomeRecordsUpdated: 0,
-  namesConsidered: 0, namesSkippedRecent: 0, searched: { tavily: 0, exa: 0 }, blocked: [],
+    namesConsidered: 0, namesSkippedRecent: 0, searched: { tavily: 0, exa: 0 }, blocked: [],
   resolved: 0, rejectedByPageCheck: 0, alreadyRegistered: 0, sourcesRegistered: 0, stoppedByTimeBudget: false,
   examples: [],
 };
@@ -87,43 +82,8 @@ async function readSite(url) {
 
 const run = apply ? await startRun("discovery") : { id: null };
 
-// 1. Festhome records whose own website was not kept: read the festival's
-//    Festhome page again and take the website it declares (no search).
-const festhomeRows = (await all("opportunities?select=id,title,organizer,category,official_url,deadline_source_url,source_url,review_decision,updated_at&review_decision=eq.pending&official_url=is.null&source_url=like.*festhome.com*&order=id.asc"))
-  .slice(0, FESTHOME_LIMIT);
-for (const row of festhomeRows) {
-  if (Date.now() > deadlineAt) {
-    summary.stoppedByTimeBudget = true;
-    break;
-  }
-  const pageUrl = row.deadline_source_url ?? row.source_url;
-  if (!(await robots(pageUrl)).allowed) continue;
-  await sleep(1000);
-  const platformPage = await fetchPage(pageUrl).catch(() => null);
-  summary.festhomeChecked += 1;
-  const website = platformWebsite(platformPage?.linkRecords ?? []);
-  const site = website ? await readSite(website) : null;
-  if (!site) continue;
-  summary.festhomeSites += 1;
-  register({ name: resolverName(row), url: site.finalUrl, category: row.category, origin: "festhome" });
-  // The organizer declares this website on its own Festhome page, and it
-  // answered now: it becomes the record's official page.
-  if (apply) {
-    const patched = await supabase(`opportunities?id=eq.${row.id}&review_decision=eq.pending&official_url=is.null`, {
-      method: "PATCH",
-      prefer: "return=representation",
-      body: JSON.stringify({
-        official_url: site.finalUrl,
-        official_url_status: "verified",
-        official_url_http_status: site.httpStatus ?? 200,
-        official_url_final: site.finalUrl,
-        official_url_last_checked_at: site.checkedAt,
-        official_url_verified_at: site.checkedAt,
-      }),
-    }).catch(() => []);
-    summary.festhomeRecordsUpdated += patched.length;
-  }
-}
+// 1. (Festhome records are no longer re-read: Festhome's terms forbid
+//    automated collection without written consent.)
 
 // 2. Names without an own site.
 const since = new Date(Date.now() - RETRY_DAYS * 86_400_000).toISOString();
@@ -235,5 +195,5 @@ if (apply && fresh.length) {
   }
 }
 summary.sourcesRegistered = apply ? fresh.length : 0;
-if (apply) await finishRun(run.id, { status: "succeeded", candidates: summary.namesConsidered, records_written: 0, discovered: summary.resolved, fetched: summary.festhomeChecked });
+if (apply) await finishRun(run.id, { status: "succeeded", candidates: summary.namesConsidered, records_written: 0, discovered: summary.resolved, fetched: 0 });
 console.log(JSON.stringify(summary, null, 2));

@@ -77,8 +77,16 @@ test("one candidate per registrable domain, and harvested sources are monitored 
     pageUrl: "https://aifilmcontests.com/contests/lifeart",
     directoryHost: "aifilmcontests.com",
   });
-  assert.equal(candidates.length, 1);
-  const row = harvestedSource(candidates[0], { ai: true, directoryHost: "aifilmcontests.com", now: NOW });
+  // Festhome pages are never a candidate (its terms forbid automated collection).
+  assert.equal(candidates.length, 0);
+  const own = officialCandidates({
+    html: `<script type="application/ld+json">{"@type":"Event","name":"LifeArt","url":"https://lifeart.example.org/festival"}</script>`,
+    linkRecords: [],
+    pageUrl: "https://aifilmcontests.com/contests/lifeart",
+    directoryHost: "aifilmcontests.com",
+  }).candidates;
+  assert.equal(own.length, 1);
+  const row = harvestedSource(own[0], { ai: true, directoryHost: "aifilmcontests.com", now: NOW });
   assert.equal(row.source_family, "ai-creative-tech");
   assert.deepEqual(row.opportunity_categories, ["ai-film"]);
   assert.equal(row.next_check_at, new Date(NOW).toISOString());
