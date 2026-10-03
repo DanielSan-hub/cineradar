@@ -1,6 +1,6 @@
 import { config } from "./config.mjs";
 import {
-  getBudgetState,
+  getBudgetState, selectAllRows,
   projectConfiguredMonthlyCost,
 } from "./cost-control.mjs";
 import { assertSourceRegistrySchema, supabase } from "./supabase.mjs";
@@ -23,11 +23,11 @@ async function main() {
 
   const now = new Date();
   const start = monthStart(now);
-  const rows = await supabase(
-    `provider_usage_events?select=provider,operation,status,usage_units,reserved_cost_eur,estimated_cost_eur,occurred_at&occurred_at=gte.${encodeURIComponent(start.toISOString())}&order=occurred_at.asc&limit=10000`,
+  const rows = await selectAllRows(
+    `provider_usage_events?select=provider,operation,status,usage_units,reserved_cost_eur,estimated_cost_eur,occurred_at&occurred_at=gte.${encodeURIComponent(start.toISOString())}&order=occurred_at.asc,id.asc`,
   );
-  const attempts = await supabase(
-    `discovery_attempts?select=attempt_kind,provider,query_family,source_id,request_count,candidate_count,validated_count,unique_opportunity_count,unique_source_count,false_positive_count,estimated_cost_eur&started_at=gte.${encodeURIComponent(start.toISOString())}&order=started_at.asc&limit=10000`,
+  const attempts = await selectAllRows(
+    `discovery_attempts?select=attempt_kind,provider,query_family,source_id,request_count,candidate_count,validated_count,unique_opportunity_count,unique_source_count,false_positive_count,estimated_cost_eur&started_at=gte.${encodeURIComponent(start.toISOString())}&order=started_at.asc,id.asc`,
   );
   const budget = await getBudgetState(now);
   const groups = new Map();

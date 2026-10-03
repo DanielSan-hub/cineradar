@@ -286,7 +286,14 @@ export async function registerProductiveSources(records) {
     if (candidate) candidates.set(candidate.host, candidate);
   }
   if (!candidates.size) return [];
-  const known = await supabase("sources?select=id,url&limit=2000");
+  // Every registered source (the server returns 1,000 rows at a time): a
+  // single read had let 488 duplicate organizer sources through.
+  const known = [];
+  for (let offset = 0; ; offset += 1000) {
+    const batch = await supabase(`sources?select=id,url&order=id.asc&limit=1000&offset=${offset}`);
+    known.push(...batch);
+    if (batch.length < 1000) break;
+  }
   const knownHosts = new Set(known.flatMap((row) => {
     try {
       return [new URL(row.url).hostname.replace(/^www\./i, "").toLowerCase()];

@@ -242,9 +242,21 @@ export function budgetPool(provider) {
   return provider === "exa" ? "exa" : "core";
 }
 
+/** Every row of a PostgREST query (the server returns at most 1,000 at a time). */
+export async function selectAllRows(path, pageSize = 1000) {
+  const rows = [];
+  for (let offset = 0; ; offset += pageSize) {
+    const batch = await supabase(`${path}&limit=${pageSize}&offset=${offset}`);
+    rows.push(...batch);
+    if (batch.length < pageSize) return rows;
+  }
+}
+
 export async function getBudgetState(now = new Date()) {
-  const rows = await supabase(
-    `provider_usage_events?select=provider,status,reserved_cost_eur,estimated_cost_eur&occurred_at=gte.${encodeURIComponent(utcMonthStart(now))}&limit=10000`,
+  // Only rows that count towards spend, every page of them (a month holds
+  // thousands of ledger rows).
+  const rows = await selectAllRows(
+    `provider_usage_events?select=provider,status,reserved_cost_eur,estimated_cost_eur&occurred_at=gte.${encodeURIComponent(utcMonthStart(now))}&status=in.(reserved,succeeded,uncertain)&order=id.asc`,
   );
   const counted = new Set(["reserved", "succeeded", "uncertain"]);
   const spend = { core: 0, exa: 0 };
