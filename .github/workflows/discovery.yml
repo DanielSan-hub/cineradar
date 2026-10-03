@@ -107,6 +107,18 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           HTTP_TIMEOUT_MS: "15000"
           EU_FT_TOPIC_LIMIT: "30"
+      # Italy for Movies (Cinecittà / Ministry of Culture): Italian film funds;
+      # the funder's own page is the official page. Free, no LLM.
+      - name: Read Italian film funds (Italy for Movies, no LLM)
+        if: always() && steps.guard.outputs.skip != 'true'
+        continue-on-error: true
+        run: node scripts/cineradar/harvest-italy-for-movies.mjs --apply
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          HTTP_TIMEOUT_MS: "15000"
+          IFM_PAGE_LIMIT: "60"
+          IFM_RECHECK_DAYS: "3"
       - name: Hunt deadlines on the calls' own Submit/Rules pages (no LLM)
         if: always() && steps.guard.outputs.skip != 'true'
         continue-on-error: true
