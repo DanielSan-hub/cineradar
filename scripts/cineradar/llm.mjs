@@ -290,10 +290,20 @@ export function pickGroqModel(available, { preference = GROQ_MODEL_PREFERENCE, p
 }
 
 /** The configured model first, then every other available model the ledger can price. */
-export function groqModelPool(available, { configured = config.groqModel, preference = GROQ_MODEL_PREFERENCE, priced = PRICED_GROQ_MODELS } = {}) {
+export function groqModelPool(available, { configured = config.groqModel, preference = GROQ_MODEL_PREFERENCE, priced = PRICED_GROQ_MODELS, freeTier = config.groqFreeTier } = {}) {
   const usable = new Set(available);
-  return [...new Set([configured, ...preference])].filter((model) => usable.has(model) && priced.includes(model));
+  const listed = [...new Set([configured, ...preference])].filter((model) => usable.has(model) && priced.includes(model));
+  // On the free tier every other chat model adds its own quota.
+  const others = freeTier
+    ? available.filter((model) => GROQ_CHAT_MODEL.test(model) && !GROQ_NOT_FOR_EXTRACTION.test(model) && !listed.includes(model)).sort()
+    : [];
+  return [...listed, ...others];
 }
+
+// Text-generation families that follow a JSON extraction prompt; guards,
+// speech, agents and embeddings never are.
+const GROQ_CHAT_MODEL = /llama|gpt-oss|qwen|kimi|deepseek|gemma|mistral|maverick/i;
+const GROQ_NOT_FOR_EXTRACTION = /guard|whisper|tts|compound|playai|orpheus|vision|embed|distil|allam/i;
 
 /**
  * The model for the next call: the first one that is neither cooling down
@@ -343,7 +353,7 @@ async function loadGroqPool() {
     const available = (body?.data ?? []).filter((model) => model?.active !== false).map((model) => String(model.id));
     if (available.length) {
       groqPool = groqModelPool(available);
-      console.warn(`Groq free-tier models in rotation: ${groqPool.join(", ") || "none"}`);
+      console.warn(`Groq models available: ${available.join(", ").slice(0, 600)}; in rotation: ${groqPool.join(", ") || "none"}`);
     }
   } catch (error) {
     console.warn(`Groq model list failed: ${String(error.message).slice(0, 160)}`);
@@ -469,6 +479,12 @@ async function groqCall(buildMessages, context, attempt = 1) {
       await release(response.status, "GROQ_MODEL_UNAVAILABLE");
       groqModelState.set(model, { ...groqModelState.get(model), exhausted: true });
       return retry("Groq model unavailable", "LLM_PROVIDER_UNAVAILABLE", response.status);
+    }
+    if (response.status === 400 && /response_format|json[_ ]?(?:mode|object)|not supported|unsupported/i.test(errorText)) {
+      // This model cannot follow the extraction format: the next one takes the page.
+      await release(400, "GROQ_MODEL_UNSUITABLE");
+      groqModelState.set(model, { ...groqModelState.get(model), exhausted: true });
+      return retry("Groq model unsuitable", "LLM_REQUEST_REJECTED", 400);
     }
     if (response.status === 400 && !/api[_ ]key|permission|organization|billing/i.test(errorText)) {
       // One page refused (invalid JSON output, ...): nothing billed, Groq

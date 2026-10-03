@@ -236,6 +236,16 @@ test("Groq rotates across free models: cooling and used-up models are skipped", 
   assert.equal(nextGroqModel(pool, state, now), null);
 });
 
+test("on the free tier every other chat model joins the rotation; guards, speech and agents never do", async () => {
+  const { groqModelPool } = await import("../scripts/cineradar/llm.mjs");
+  const available = ["openai/gpt-oss-20b", "moonshotai/kimi-k2-instruct-0905", "meta-llama/llama-guard-4-12b", "whisper-large-v3", "groq/compound", "openai/gpt-oss-120b"];
+  assert.deepEqual(groqModelPool(available, { configured: "openai/gpt-oss-20b", freeTier: true }),
+    ["openai/gpt-oss-20b", "openai/gpt-oss-120b", "moonshotai/kimi-k2-instruct-0905"]);
+  // On a paid plan only models with a listed price are used.
+  assert.deepEqual(groqModelPool(available, { configured: "openai/gpt-oss-20b", freeTier: false }),
+    ["openai/gpt-oss-20b", "openai/gpt-oss-120b"]);
+});
+
 test("Groq free tier is booked at zero and prompts shrink to a model's token limit", async () => {
   const { groqCharge, groqTextBudget, groqTokenLimit } = await import("../scripts/cineradar/llm.mjs");
   assert.equal(groqCharge(0.004, { freeTier: true }), 0);

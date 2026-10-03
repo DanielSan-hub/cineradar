@@ -135,6 +135,42 @@ Auto-review now rejects aggregator pages (directory sources with an aggregator
 name or 3+ unrelated organizers), closed titles, and watches not-yet-open calls;
 names lose website chrome/entities/announcements; the daily re-check no longer
 flips approvals on film relevance. Public catalogue: 59.
+Update 2026-10-03 (owner: 90% coverage target "senza spendere nulla"; plan of
+8 free points approved with "procediamo"; FilmFreeway still never fetched):
+ZERO SPEND. Exa is off (`DISCOVERY_QUERY_LIMIT` 0; the 9/month pool below is
+unused). LLMs: Cloudflare inside its free daily neurons (booked 0), then Groq
+free tier rotating across the account's models (each has its own quota; a long
+429 retires a model for the run, "request too large" teaches its token limit;
+booked 0 via `GROQ_FREE_TIER`, default true - set false only on a paid Groq
+plan). Browser Rendering free (40/day). Free-tier terms: Gemini free is not
+usable for EEA users; Mistral/GitHub Models free tiers are evaluation-only.
+Pipeline additions (all no-LLM): series-anchored extraction
+(`series-extraction.mjs`: a registered series' own site -> deadline from the
+page or its Submit/Rules subpages, platform submission link, explicit
+open/closed); Festhome connector (`harvest-platforms.mjs` daily step, ~585
+open festivals, final deadline from the organizer's calendar, own website
+registered as a source); deadline tier lists ("DEADLINES: Earlybird ...
+Extended: Dec 31") read as one calendar; the hunt reads a call's own page first
+and never borrows a date when that page's own calendar has passed; series
+homepages that link a Submit/Rules page pass the gates; the queue query pages
+past deferred rows (it had processed ~230 of ~1,580 ready pages per run).
+Auto-review v5: up to 50 approvals/run (AI first, then soonest deadline);
+Festhome calendars re-read on the platform; "open on platform" calls (organizer
+says submissions are open + links its platform page, no date anywhere) are
+published as `verified` with no date and re-read every run; section headings
+("The festival in numbers") and craft categories take the organizer's name.
+Monitor: up to 4,500 sources/run (24 concurrent, 33-min budget, job 36 min);
+discovery job 75 min. `requeue-pages.mjs` (dry run by default) puts series
+pages settled by older processors back in the queue once.
+Coverage on the owner's datasets (evaluation only; datasets stay local, run
+`work/miss-diagnosis.mjs` and `coverage.mjs` with `CINERADAR_SEED_DATASETS`):
+2026-10-03 found 22.6% (held-out 12%), published 4.2%. Misses: page queued
+but unprocessed 29%, found but not published 17%, homepage gated (call on a
+subpage) 10%, registered never checked 10%, FilmFreeway-only 10%, fetch
+failures 6%. The queue, gate and monitor fixes above target the first four.
+UI (needs a Sites deploy via Codex, commit `5ef1070` or later): "Submissions
+open - deadline on <platform>" badge and "Apply on <platform>" link for the
+platform-open calls (`deadlinePlatform` in `lib/opportunity-format.ts`).
 
 Owner approval 2026-09-28: Exa has its own budget pool of at most 9/month
 (ledger units; USD is counted 1:1 so real spend stays <= USD 9). All other

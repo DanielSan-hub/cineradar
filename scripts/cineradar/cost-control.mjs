@@ -17,8 +17,9 @@ const GROQ_PRICING = Object.freeze({
     inputUsdPerMillion: 0.075,
     outputUsdPerMillion: 0.30,
   }),
-  // Free-tier models are still booked at their paid list price, so the
-  // ledger stays an upper bound if the account is ever upgraded.
+  // List prices size each reservation. While the account is on the free tier
+  // (GROQ_FREE_TIER, default true) usage is booked at EUR 0, as Cloudflare's
+  // free daily allowance is; set GROQ_FREE_TIER=false on a paid plan.
   "meta-llama/llama-4-scout-17b-16e-instruct": Object.freeze({
     inputUsdPerMillion: 0.11,
     outputUsdPerMillion: 0.34,
@@ -43,6 +44,12 @@ const GROQ_PRICING = Object.freeze({
 
 /** Groq models the ledger can price (a model without a price is never used). */
 export const PRICED_GROQ_MODELS = Object.freeze(Object.keys(GROQ_PRICING));
+// A free-tier model missing from the table is sized at the highest listed
+// price (its usage is booked at EUR 0 while GROQ_FREE_TIER holds).
+const GROQ_UNLISTED_PRICING = Object.freeze({
+  inputUsdPerMillion: Math.max(...Object.values(GROQ_PRICING).map((price) => price.inputUsdPerMillion)),
+  outputUsdPerMillion: Math.max(...Object.values(GROQ_PRICING).map((price) => price.outputUsdPerMillion)),
+});
 const EXA_SEARCH_RESERVATION_USD = 0.01;
 
 export class BudgetBlockedError extends Error {
@@ -97,7 +104,7 @@ export function estimateGroqUsage(
   { inputTokens, outputTokens, cachedInputTokens = 0 },
   model = config.groqModel,
 ) {
-  const pricing = priceFor(GROQ_PRICING, model, "Groq");
+  const pricing = GROQ_PRICING[model] ?? (config.groqFreeTier ? GROQ_UNLISTED_PRICING : priceFor(GROQ_PRICING, model, "Groq"));
   const input = finiteNonnegative(inputTokens) + finiteNonnegative(cachedInputTokens);
   const output = finiteNonnegative(outputTokens);
   const costUsd = (
