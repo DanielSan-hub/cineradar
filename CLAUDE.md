@@ -181,6 +181,51 @@ UI (needs a Sites deploy via Codex, commit `ac13ef4` or later; archive
 `work/deploy-ac13ef4-20261003.tar.gz`): "Submissions open - deadline on
 <platform>" badge and "Apply on <platform>" link for the platform-open calls
 (`deadlinePlatform` in `lib/opportunity-format.ts`).
+Update 2026-10-03 (afternoon; owner: TAVILY_KEY added to Actions secrets, Exa
+gives USD 10 of free credits every month - verified on exa.ai: monthly reset,
+402 when used up, no card on file). Still zero spend:
+- Exa back on inside its free credits: DB pool 9 (optional work stops at
+  8.1 < 10); requests priced by shape (instant 0.004, auto 0.007, +0.001 per
+  result over 10); 402/422/429 never billed and a 402 stops Exa for the run.
+  Discovery: 3 gap queries/run x 10 results. Owner should confirm in the Exa
+  dashboard that auto-recharge is off and no other tool uses the same team.
+- Tavily (`tavily.mjs`): free plan 1,000 credits/month, booked at EUR 0 with
+  credits in usage_units; the client stops at TAVILY_MONTHLY_CREDIT_CAP 900
+  (the DB RPC does not cap Tavily credits) and on 432/433. Key only in CI
+  (secret TAVILY_KEY -> env TAVILY_API_KEY). Tavily's terms forbid publishing
+  its performance figures: keep Tavily-vs-Exa comparisons out of the repo.
+- `resolve-names.mjs` (daily step): own sites for names from the DB only
+  (Festhome records' declared websites re-read for free; pending records
+  without an own page; Wikidata sources marked DEAD_DOMAIN). Tavily 15 + Exa
+  instant 15 per run; a site needs a distinctive name word or initials in
+  its domain and its homepage must name the series; only sources are
+  registered (seed resolver:*). First run 3/7 wrong -> rules tightened, the 3
+  disabled. `resolve-sites.mjs` (local, datasets, seeded only) now uses Exa
+  instant: 32 sites for 129 FilmFreeway-only series (USD 0.52).
+- Monitor: a host that does not resolve twice in a row -> DEAD_DOMAIN
+  (blocked, out of rotation; ~1,200 lapsed Wikidata domains expected).
+- FestAgent connector (in `harvest-platforms.mjs`, with Festhome): free
+  default listing only (never subscription filters), 1.5 s/request; ~1,520
+  cards with own websites registered as sources; open festivals' pages give
+  the final deadline. Its footer requires a link to the source: records keep
+  the FestAgent page as source/deadline source, never as application link;
+  /o/[slug] shows "Where we found it: FestAgent", "Deadline from FestAgent",
+  "As stated on FestAgent". Auto-review accepts its calendar only on
+  organizer-managed pages. Old generic FestAgent sources were disabled.
+- EU connector (`harvest-eu-funding.mjs`): Creative Europe MEDIA topics from
+  the Funding & Tenders public search API (apiKey=SEDIA is the portal's
+  public key; robots allow; CC BY 4.0 credit on record pages). Scope:
+  development, co-development, video games/immersive, TV/online, innovation
+  labs (6 open topics today); industry topics with EU_FT_INCLUDE_INDUSTRY.
+  Auto-review re-reads the topic JSON and accepts ec.europa.eu for the
+  Commission. Known limit: a multi-cut-off topic is archived after its first
+  cut-off (the next one is not re-published automatically yet).
+- 20 film funds/commissions from Wikidata registered (family film-funding);
+  Wikidata residencies were too noisy to import.
+- Ledger/registry reads now page past PostgREST's 1,000-row cap.
+- Groq account models in rotation: gpt-oss-20b, gpt-oss-120b, qwen3.8-27b.
+Deploy target for the UI (FestAgent/EU attribution, platform badges): latest
+main (`4ef0cac` or later), archive `work/deploy-4ef0cac-20261003.tar.gz`.
 
 Owner approval 2026-09-28: Exa has its own budget pool of at most 9/month
 (ledger units; USD is counted 1:1 so real spend stays <= USD 9). All other
