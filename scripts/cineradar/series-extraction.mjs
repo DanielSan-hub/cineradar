@@ -161,10 +161,75 @@ const PAGE_LABEL_NAME = {
 };
 
 /** The series' public name: the registry name, unless it is only a host or a page label. */
+const NAME_STOP = new Set(["film", "films", "festival", "fest", "international", "the", "and", "of", "for", "de", "del", "la", "le", "di", "du", "der", "und", "short", "shorts", "awards", "award", "alliance", "foundation"]);
+const nameTokens = (value) => String(value ?? "").toLowerCase().normalize("NFKD").replace(/\p{M}/gu, "")
+  .split(/[^\p{L}\p{N}]+/u).filter((token) => token.length >= 3 && !NAME_STOP.has(token));
+
+/** True when a distinctive word of the name (or its initials) is in the site's domain. */
+export function nameFitsHost(name, url) {
+  const label = String(hostOf(url) ?? "").split(".").slice(0, -1).join("").replace(/[^a-z0-9]/g, "");
+  if (!label) return false;
+  const tokens = nameTokens(name);
+  const initials = String(name ?? "").split(/[^\p{L}\p{N}]+/u).filter(Boolean).map((word) => word[0]).join("").toLowerCase();
+  return tokens.some((token) => token.length >= 4 && label.includes(token)) || (initials.length >= 3 && label.includes(initials));
+}
+
+function decodeBasicEntities(value) {
+  return String(value ?? "").replace(/&amp;/g, "&").replace(/&#0?39;|&rsquo;|&apos;/g, "'").replace(/&quot;/g, "\"").replace(/&nbsp;/g, " ")
+    .replace(/&#(\d+);/g, (_, code) => String.fromCodePoint(Number(code)));
+}
+
+/** The page's main heading (h1), as text. */
+function pageHeading(page) {
+  const raw = /<h1\b[^>]*>([\s\S]{2,400}?)<\/h1>/i.exec(page?.html ?? "")?.[1];
+  const heading = decodeBasicEntities(String(raw ?? "").replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim();
+  return heading.length >= 4 && heading.length <= 120 ? heading : null;
+}
+
+const EVENT_NAME_WORD = /\b(?:festival|fest|contest|competition|challenge|awards?|prize|fund|grant|residenc\w*|lab|fellowship|concurso|certamen|premio|concorso|wettbewerb|preis|bourse|r[ée]sidence|convocatoria|bando|appel)\b/iu;
+// News and blog posts tell about one thing (a workshop, a casting, a past
+// edition): they are not where a series states its call.
+export const NEWS_PATH = /\/(?:blog|news|noticias|novedades|actualit[eé]s?|notizie|nachrichten|press|prensa|articles?|posts?|magazine|stories)(?:\/|$)/iu;
+
+/** The URL's path ("" when it cannot be parsed). */
+export function urlPath(url) {
+  try {
+    return new URL(url).pathname;
+  } catch {
+    return "";
+  }
+}
+
+function isRootPage(url) {
+  try {
+    return /^\/(?:[a-z]{2}(?:-[a-z]{2})?\/?)?(?:index\.\w+|home\/?)?$/i.test(new URL(url).pathname);
+  } catch {
+    return true;
+  }
+}
+
 export function seriesName(source, home) {
   const registry = String(source?.name ?? "").replace(/\s+/g, " ").trim();
-  if (registry && !HOST_LIKE.test(registry) && !PAGE_LABEL_NAME.test(registry)) return registry.slice(0, 200);
   const site = metaContent(home?.html, "og:site_name");
+  let base = null;
+  if (registry && !HOST_LIKE.test(registry) && !PAGE_LABEL_NAME.test(registry)) {
+    base = registry.slice(0, 200);
+    // A registry name that shares nothing with the site's domain, while the
+    // site's own name does ("SouArt Alliance" for atlantaaiadfest.com): the
+    // site's name is the series.
+    const url = home?.finalUrl ?? source?.url;
+    if (site && !/^(?:home|homepage|welcome|index)$/i.test(site) && !nameFitsHost(registry, url) && nameFitsHost(site, url)) base = site.slice(0, 200);
+  }
+  // A call's own page (not the homepage) whose heading names an event names
+  // that call ("2026 AI Horror Film Contest" on Curious Refuge's site).
+  if (base && home && !isRootPage(home.finalUrl) && !NEWS_PATH.test(urlPath(home.finalUrl))) {
+    const heading = pageHeading(home);
+    if (heading && EVENT_NAME_WORD.test(heading) && !PAGE_LABEL_NAME.test(heading)) {
+      const shared = nameTokens(heading).some((token) => nameTokens(base).includes(token));
+      return (shared ? heading : `${base} – ${heading}`).slice(0, 200);
+    }
+  }
+  if (base) return base;
   if (site && !/^(?:home|homepage|welcome|index)$/i.test(site)) return site.slice(0, 200);
   const title = /<title[^>]*>([\s\S]{2,200}?)<\/title>/i.exec(home?.html ?? "")?.[1]?.replace(/\s+/g, " ").split(/\s[|–—-]\s/)[0].trim();
   if (title && !PAGE_LABEL_NAME.test(title)) return title;

@@ -185,3 +185,17 @@ test("a published call stays public until its deadline; a new one needs two days
   assert.equal(kept.decision, "approve");
   assert.equal(kept.targetStatus, "closing-soon");
 });
+
+test("a news or blog post about something else is not a call's own page", () => {
+  const post = { ...live, official_url: "https://kinoathens.example.org/blog/festival-photos-2026" };
+  const result = autoReviewDecision(post, { now: NOW, page: { ...goodPage, finalUrl: post.official_url } });
+  assert.equal(result.decision, "human");
+  assert.ok(result.reasons.some((text) => /news or blog post/.test(text)));
+});
+
+test("an organizer's own post announcing its call is its page; an aggregator's post is not", () => {
+  const own = { ...live, title: "Kaboom Animation Festival", organizer: "Kaboom Animation Festival", official_url: "https://www.kaboomfestival.nl/news/call-for-entries-2027-is-now-open/" };
+  assert.equal(autoReviewDecision(own, { now: NOW, page: { ...goodPage, finalUrl: own.official_url } }).decision, "approve");
+  const aggregator = { ...live, title: "Eyebeam: Democracy Machine Fellowship Open Call", organizer: "On the Move", official_url: "https://on-the-move.org/news/eyebeam-democracy-machine-fellowship-open-call-online-usa" };
+  assert.equal(autoReviewDecision(aggregator, { now: NOW, page: { ...goodPage, finalUrl: aggregator.official_url } }).decision, "human");
+});

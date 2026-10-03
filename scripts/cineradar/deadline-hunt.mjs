@@ -66,7 +66,7 @@ export function huntLinks(linkRecords, { pageUrl, limit = 3 } = {}) {
 }
 
 // Dates for other kinds of calls on festival sites.
-export const NOT_A_SUBMISSION = /\b(?:volunteers?|volunteering|jur(?:y|ies)|jurors?|tickets?|ticketing|accreditations?|press\s+pass|internships?|interns?|jobs?|vacanc(?:y|ies)|hiring|careers?|sponsors?|sponsorship|vendors?|exhibitors?|stalls?|workshops?|masterclass(?:es)?|screenings?\s+schedule|volontari|voluntarios|bénévoles|freiwillige)\b/iu;
+export const NOT_A_SUBMISSION = /\b(?:volunteers?|volunteering|jur(?:y|ies)|jurors?|tickets?|ticketing|accreditations?|press\s+pass|internships?|interns?|jobs?|vacanc(?:y|ies)|hiring|careers?|sponsors?|sponsorship|vendors?|exhibitors?|stalls?|workshops?|masterclass(?:es)?|screenings?\s+schedule|volontari|voluntarios|bénévoles|freiwillige|casting|actors?|actresses|actores|actrices|attori|attrici|schauspieler\w*)\b/iu;
 
 const MONTH_PATTERN =[...MONTH_NUMBERS.keys()].sort((a, b) => b.length - a.length).join("|");
 // Words that put a following date in charge of submissions.

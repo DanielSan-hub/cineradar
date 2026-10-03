@@ -54,10 +54,12 @@ import {
   isSeriesSource,
   pageHasPlatformLink,
   pageHasSubmissionLink,
+  NEWS_PATH,
   platformOf,
   seriesEvidence,
   seriesName,
   seriesRawItem,
+  urlPath,
 } from "./series-extraction.mjs";
 import { canonicalizeUrl } from "./web-validation.mjs";
 
@@ -94,6 +96,13 @@ async function processSeriesItem(item) {
   }
   const source = item.candidate.source;
   const home = item.page;
+  // A news or blog post tells about one thing (a casting, a workshop, a past
+  // edition): it is not where a series states its call.
+  if (NEWS_PATH.test(urlPath(home.finalUrl))) {
+    if (item.ai || Number(source?.priority ?? 3) <= 2) return { needsLlm: true, item };
+    incrementMetric(metrics, "series_no_evidence");
+    return { result: { ...item, records: [], processed: true } };
+  }
   const name = seriesName(source, home) ?? item.candidate.title;
   try {
     const quick = seriesEvidence([home], { title: name });

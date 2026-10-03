@@ -192,7 +192,8 @@ test("past-tense dates and label-only names are not used", async () => {
   assert.equal(inferYearlessDeadline("2026 edition. The call closes on April 13.", { now: NOW }), null);
   assert.equal(inferYearlessDeadline("Edition 2027. The call closes on April 13.", { now: NOW }).deadline, "2027-04-13");
   assert.equal(seriesName({ name: "Submissions FAQ" }, page({ html: '<meta property="og:site_name" content="Nashville Film Festival">' })), "Nashville Film Festival");
-  assert.equal(seriesName({ name: "Rules of the Game Film Fest" }, page()), "Rules of the Game Film Fest");
+  // A name that merely contains a label word is a name (the page names no other series).
+  assert.equal(seriesName({ name: "Rules of the Game Film Fest" }, page({ html: "<html></html>" })), "Rules of the Game Film Fest");
 });
 
 test("a series homepage that links its own Submit/Rules page passes the call gate", () => {
@@ -205,4 +206,16 @@ test("a series homepage that links its own Submit/Rules page passes the call gat
   assert.equal(pageHasSubmissionLink(page([{ url: "https://kinofest.example.org/news/submissions-closed", text: "News" }])), false);
   assert.equal(pageHasSubmissionLink(page([{ url: "https://kinofest.example.org/volunteer", text: "Apply to volunteer" }])), false);
   assert.equal(pageHasSubmissionLink(page([{ url: "https://kinofest.example.org/programme", text: "Programme" }])), false);
+});
+
+test("series names: the site's own name when the registry name is foreign; a call page's heading names the call", async () => {
+  const { nameFitsHost } = await import("../scripts/cineradar/series-extraction.mjs");
+  const page = (url, html) => ({ finalUrl: url, html });
+  assert.equal(seriesName({ name: "SouArt Alliance" }, page("https://www.atlantaaiadfest.com/en", `<meta property="og:site_name" content="Atlanta AI Ad Fest">`)), "Atlanta AI Ad Fest");
+  assert.equal(seriesName({ name: "Curious Refuge" }, page("https://curiousrefuge.com/2026-ai-horror-film-contest-rules", "<h1>2026 AI Horror Film Contest Rules</h1>")), "Curious Refuge – 2026 AI Horror Film Contest Rules");
+  assert.equal(seriesName({ name: "Tampere Film Festival" }, page("https://tamperefilmfestival.fi/", "<h1>Welcome</h1>")), "Tampere Film Festival");
+  // A blog post's heading never names the series' call.
+  assert.equal(seriesName({ name: "Ícaro" }, page("https://www.festivalicaro.com/blog/residencia-actores", "<h1>Residencia actores</h1>")), "Ícaro");
+  assert.equal(nameFitsHost("Hot Docs", "https://hotdocs.ca"), true);
+  assert.equal(nameFitsHost("SouArt Alliance", "https://www.atlantaaiadfest.com/en"), false);
 });

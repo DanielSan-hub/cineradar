@@ -21,7 +21,7 @@ import { mapPool } from "./http.mjs";
 import { finalFesthomeDeadline, parseFesthomeDeadlines } from "./platform-connectors.mjs";
 import { seriesKey } from "./registry-seeds.mjs";
 import { createRobotsChecker } from "./robots.mjs";
-import { platformOf, seriesEvidence } from "./series-extraction.mjs";
+import { nameFitsHost, platformOf, seriesEvidence } from "./series-extraction.mjs";
 import { supabase } from "./supabase.mjs";
 import { isGenericTitle } from "./normalization.mjs";
 import { fetchPageOrRender } from "./browser-render.mjs";
@@ -55,6 +55,24 @@ function editionYear(row) {
   const fromTitle = [...String(row.title ?? "").matchAll(/\b(20\d{2})\b/g)].map((match) => Number(match[1]));
   return row.edition_year ?? (fromTitle.length ? Math.max(...fromTitle) : null)
     ?? (row.deadline ? new Date(row.deadline).getUTCFullYear() : null);
+}
+
+const nameWordSet = (value) => new Set(seriesKey(value).split(" ").filter((token) => token.length > 2));
+function covers(left, right) {
+  const mine = nameWordSet(left);
+  const theirs = nameWordSet(right);
+  if (!mine.size || !theirs.size) return false;
+  const shared = [...mine].filter((token) => theirs.has(token)).length;
+  return shared / Math.min(mine.size, theirs.size) >= 0.6;
+}
+/**
+ * The same call recorded twice with name and organizer swapped: each name is
+ * the other's organizer, and the organizers differ. Sub-calls of one organizer
+ * ("NFFTY 2027" and "NFFTY – Screenplay", both by NFFTY) never match.
+ */
+function namesSwap(left, right) {
+  return covers(left.title, right.organizer) && covers(right.title, left.organizer)
+    && !covers(left.organizer, right.organizer);
 }
 
 /** Pending records that repeat another record of the same series and edition. */
@@ -113,6 +131,14 @@ function findDuplicates(rows) {
     if (!named.length) continue;
     for (const row of group) {
       if (HEADING.test(String(row.title ?? "").trim()) && !duplicates.has(row.id)) duplicates.set(row.id, named[0]);
+    }
+    // One call recorded twice with name and organizer swapped ("Atlanta AI Ad
+    // Fest (AIAF)" by SouArt Alliance, "SouArt Alliance" by Atlanta AI Ad Fest).
+    for (const row of named) {
+      if (row.review_decision !== "pending" || duplicates.has(row.id)) continue;
+      const keep = named.find((other) => other.id !== row.id && !duplicates.has(other.id)
+        && rank(other) >= rank(row) && namesSwap(row, other));
+      if (keep) duplicates.set(row.id, keep);
     }
   }
   // Compare every pending record with better-ranked records (approved first,
@@ -440,6 +466,25 @@ for (const group of publishedGroups.values()) {
     expiredIds.add(row.id);
   }
 }
+// Same site, same deadline, name and organizer swapped: keep the record whose
+// name is in the site's domain.
+const bySiteDeadline = new Map();
+for (const row of published) {
+  if (expiredIds.has(row.id) || !row.deadline) continue;
+  const key = `${siteKey(row.official_url ?? row.source_url)}|${String(row.deadline).slice(0, 10)}`;
+  if (!bySiteDeadline.has(key)) bySiteDeadline.set(key, []);
+  bySiteDeadline.get(key).push(row);
+}
+for (const group of bySiteDeadline.values()) {
+  if (group.length < 2) continue;
+  group.sort((left, right) => Number(nameFitsHost(right.title, right.official_url)) - Number(nameFitsHost(left.title, left.official_url))
+    || String(left.id).localeCompare(String(right.id)));
+  for (const row of group.slice(1)) {
+    if (expiredIds.has(row.id) || !namesSwap(row, group[0])) continue;
+    expired.push({ ...row, duplicateOf: group[0] });
+    expiredIds.add(row.id);
+  }
+}
 const renames = published
   .filter((row) => !expiredIds.has(row.id) && !autoApproved.has(row.id))
   .map((row) => ({ row, changes: publicNameChanges(row) }))
@@ -452,7 +497,7 @@ summary.published_maintenance = {
 if (apply) {
   for (const row of expired) {
     const reason = row.duplicateOf
-      ? `${AUTO_REVIEW_VERSION}: duplicate of the published "${row.duplicateOf.title}" (same organizer, deadline and name)`
+      ? `${AUTO_REVIEW_VERSION}: duplicate of the published "${row.duplicateOf.title}" (the same call published twice)`
       : `${AUTO_REVIEW_VERSION}: the deadline (${String(row.deadline).slice(0, 10)}) has passed; the call is no longer open`;
     const result = await rpc(row, "archive", reason);
     if (!result?.ok) summary.errors += 1;
