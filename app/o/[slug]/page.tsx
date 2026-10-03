@@ -17,7 +17,7 @@ import {
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
-import { dataSourceName, deadlineCountdown, deadlinePlatform, formatDeadline, formatMoney, aiPolicyLabel, platformApplyUrl, platformCountdown } from "@/lib/opportunity-format";
+import { dataSourceName, EU_PORTAL, deadlineCountdown, deadlinePlatform, formatDeadline, formatMoney, aiPolicyLabel, platformApplyUrl, platformCountdown } from "@/lib/opportunity-format";
 import { getPublicOpportunity } from "@/lib/server/data";
 import type { Opportunity } from "@/lib/types";
 
@@ -171,9 +171,11 @@ export default async function OpportunityPage({ params }: PageProps) {
 
         <footer className="mt-12 border-t border-white/8 pt-6 text-sm leading-6 text-slate-500">
           {lastChecked ? <p>Official page last checked {lastChecked}.</p> : null}
-          <p>{deadlinePlatformName
-            ? `Dates come from the festival's page on ${deadlinePlatformName} (linked above); anything not stated there is shown as not stated. Always confirm rules and dates on the official page before applying.`
-            : "Facts come from the organizer's own pages; anything not stated there is shown as not stated. Always confirm rules and dates on the official page before applying."}</p>
+          <p>{deadlinePlatformName === EU_PORTAL
+            ? "Source: EU Funding & Tenders Portal, © European Union, CC BY 4.0 (adapted). Always confirm rules and dates in the call documents before applying."
+            : deadlinePlatformName
+              ? `Dates come from the festival's page on ${deadlinePlatformName} (linked above); anything not stated there is shown as not stated. Always confirm rules and dates on the official page before applying.`
+              : "Facts come from the organizer's own pages; anything not stated there is shown as not stated. Always confirm rules and dates on the official page before applying."}</p>
         </footer>
       </main>
     </div>

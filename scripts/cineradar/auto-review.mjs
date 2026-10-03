@@ -17,6 +17,7 @@ import {
 import { isAiFilmText, scoreCallSignal } from "./call-signal.mjs";
 import { huntDeadline } from "./deadline-hunt.mjs";
 import { extractDeadline } from "./decision-fields.mjs";
+import { euTopicDetailsState, euTopicDetailsUrl, euTopicIdentifier } from "./eu-funding-connector.mjs";
 import { mapPool } from "./http.mjs";
 import { finalFestagentDeadline, finalFesthomeDeadline, parseFestagentDeadlines, parseFesthomeDeadlines } from "./platform-connectors.mjs";
 import { hostOf, seriesKey } from "./registry-seeds.mjs";
@@ -179,9 +180,39 @@ function sameSite(left, right) {
   return Boolean(base(left)) && base(left) === base(right);
 }
 
+// A Creative Europe topic page is a JavaScript application: the topic's
+// official JSON on the same portal is re-read instead.
+async function checkEuTopic(row, url, identifier) {
+  const detailsUrl = euTopicDetailsUrl(identifier);
+  if (!(await robots(detailsUrl)).allowed) return { ok: false, reason: "ROBOTS_DISALLOWED" };
+  const response = await fetch(detailsUrl, { headers: { "user-agent": "CineRadarBot/2.0 (+https://cineradar.danielmaker.chatgpt.site)" } }).catch(() => null);
+  if (!response?.ok) return { ok: false, httpStatus: response?.status ?? null };
+  const state = euTopicDetailsState(await response.json().catch(() => null));
+  const deadline = row.deadline ? String(row.deadline).slice(0, 10) : null;
+  const future = state.deadlines.filter((date) => Date.parse(`${date}T23:59:59Z`) >= Date.now());
+  return {
+    ok: true,
+    url,
+    finalUrl: url,
+    httpStatus: 200,
+    checkedAt: new Date().toISOString(),
+    closed: !state.open || !future.length,
+    callSignal: state.open,
+    deadlineEvidenceFound: Boolean(deadline && state.deadlines.includes(deadline)),
+    quoteStillOnPage: true,
+    openStatementFound: false,
+    organizer: null,
+    directoryPage: false,
+    mentionsCurrentYear: true,
+    filmContext: true,
+  };
+}
+
 async function checkOfficialPage(row) {
   const url = row.official_url ?? (row.source_type === "official" ? row.source_url : null);
   if (!url) return { ok: false };
+  const euTopic = euTopicIdentifier(url);
+  if (euTopic) return checkEuTopic(row, url, euTopic);
   const permission = await robots(url);
   if (!permission.allowed) return { ok: false, reason: permission.reason };
   try {

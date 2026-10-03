@@ -112,11 +112,16 @@ const DATA_SOURCES = [
   { name: "Festhome", host: "festhome.com" },
 ] as const;
 
-/** "FestAgent" or "Festhome" when a URL is on that platform, else null. */
+/** The EU portal's records are reused under CC BY 4.0 (Commission Decision 2011/833/EU). */
+export const EU_PORTAL = "EU Funding & Tenders Portal";
+
+/** "FestAgent", "Festhome" or the EU portal when a URL is on it, else null. */
 export function dataSourceName(url: string | null | undefined) {
   if (!url) return null;
   try {
-    const host = new URL(url).hostname.toLowerCase();
+    const parsed = new URL(url);
+    const host = parsed.hostname.toLowerCase();
+    if (host === "ec.europa.eu" && parsed.pathname.startsWith("/info/funding-tenders/")) return EU_PORTAL;
     return DATA_SOURCES.find((source) => host === source.host || host.endsWith(`.${source.host}`))?.name ?? null;
   } catch {
     return null;
