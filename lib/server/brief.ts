@@ -66,3 +66,25 @@ export async function getLatestBrief(): Promise<WeeklyBrief | null> {
     return null;
   }
 }
+
+export type CoverageSlice = { actionable_series: number; found_pct: number | null; published_pct: number | null; registered_pct: number | null; monitored_pct: number | null };
+export type CoverageReport = { measured_at: string; held_out_20pct: CoverageSlice; seeded_80pct: CoverageSlice; all: CoverageSlice };
+
+/**
+ * The latest weekly coverage report (owner's datasets as truth), read from
+ * the private Supabase bucket with the server key; null when none exists.
+ */
+export async function getLatestCoverage(): Promise<CoverageReport | null> {
+  const base = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  if (!SUPABASE_SERVICE_ROLE_KEY || !base) return null;
+  try {
+    const response = await fetch(`${base}/storage/v1/object/cineradar-private/evaluation/coverage-latest.json`, {
+      headers: { apikey: SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}` },
+      cache: "no-store",
+    });
+    if (!response.ok) return null;
+    return (await response.json()) as CoverageReport;
+  } catch {
+    return null;
+  }
+}

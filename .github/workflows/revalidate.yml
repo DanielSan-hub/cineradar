@@ -12,7 +12,7 @@ concurrency:
 jobs:
   revalidate:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     permissions:
       contents: read
     steps:
@@ -32,6 +32,16 @@ jobs:
       - name: Build the weekly team brief (stored records only, no LLM)
         if: always()
         run: node scripts/cineradar/weekly-brief.mjs --apply
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      # Weekly coverage against the owner's reference datasets, read from the
+      # private Supabase bucket (never from the repo or the owner's PC).
+      # Prints aggregates only; the report is stored privately for /team/brief.
+      - name: Measure coverage of the reference datasets (private, aggregates only)
+        if: always()
+        continue-on-error: true
+        run: node scripts/cineradar/coverage.mjs --store
         env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}

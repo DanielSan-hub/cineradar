@@ -3,7 +3,7 @@ import { ArrowLeft, ArrowUpRight, CalendarClock, Radar } from "lucide-react";
 
 import { requireTeamUser } from "@/app/chatgpt-auth";
 import { Badge } from "@/components/ui/badge";
-import { getLatestBrief } from "@/lib/server/brief";
+import { getLatestBrief, getLatestCoverage, type CoverageSlice } from "@/lib/server/brief";
 import { BRIEF_SECTION_LABELS, BRIEF_SECTIONS } from "@/lib/weekly-brief.mjs";
 
 export const metadata: Metadata = { title: "Weekly brief" };
@@ -17,7 +17,7 @@ function formatDay(iso: string) {
 
 export default async function BriefPage() {
   await requireTeamUser("/team/brief");
-  const brief = await getLatestBrief();
+  const [brief, coverage] = await Promise.all([getLatestBrief(), getLatestCoverage()]);
   const sections = (BRIEF_SECTIONS as readonly string[])
     .map((section) => ({ section, items: brief?.items.filter((item) => item.section === section) ?? [] }))
     .filter((entry) => entry.items.length);
@@ -33,6 +33,17 @@ export default async function BriefPage() {
       </header>
 
       <div className="mx-auto max-w-[960px] px-4 py-8 sm:px-6">
+        {coverage && (
+          <section className="mb-8 rounded-2xl border border-white/8 bg-white/[0.025] p-5">
+            <h2 className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Coverage of the reference datasets · measured {formatDay(coverage.measured_at)}</h2>
+            <div className="mt-4 grid gap-3 sm:grid-cols-3">
+              <CoverageTile label="All reference series" slice={coverage.all} />
+              <CoverageTile label="Held-out (never seeded)" slice={coverage.held_out_20pct} />
+              <CoverageTile label="Seeded" slice={coverage.seeded_80pct} />
+            </div>
+            <p className="mt-3 text-xs text-slate-500">Found = the call is in CineRadar (any review state); published = visible on the public radar. Held-out is the honest measure of discovery.</p>
+          </section>
+        )}
         {!brief ? (
           <div className="rounded-2xl border border-dashed border-white/12 p-10 text-center text-slate-400">
             No brief yet. It is generated every Sunday from the published records (it needs the weekly_briefs migration).
@@ -80,5 +91,15 @@ export default async function BriefPage() {
         )}
       </div>
     </main>
+  );
+}
+
+function CoverageTile({ label, slice }: { label: string; slice: CoverageSlice }) {
+  return (
+    <div className="rounded-xl border border-white/8 bg-white/[0.025] p-4">
+      <p className="text-xs text-slate-500">{label} ({slice.actionable_series})</p>
+      <p className="mt-2 text-2xl font-semibold tracking-[-0.03em] text-white">{slice.found_pct ?? 0}% <span className="text-sm font-normal text-slate-400">found</span></p>
+      <p className="mt-1 text-sm text-slate-400">{slice.published_pct ?? 0}% published · {slice.monitored_pct ?? 0}% monitored</p>
+    </div>
   );
 }

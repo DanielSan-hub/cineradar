@@ -1,17 +1,15 @@
-// Evaluation-only coverage report. Reads the owner's datasets from
-// CINERADAR_SEED_DATASETS and the live registry/opportunities; writes nothing.
+// Evaluation-only coverage report. Reads the owner's datasets (local XLSX or
+// the private truth file) and the live registry/opportunities; with --store
+// it saves the report in the private bucket, nothing else is written.
 //
 // The held-out slice is the honest number: those series were never seeded, so
 // anything found there was found by the pipeline itself (Wikidata, link
 // expansion, portals, gap search).
 
-import { basename } from "node:path";
-
 import { supabase } from "./supabase.mjs";
-import { chapman, hostOf, isHeldOut, isPlatformHost, seriesKey } from "./registry-seeds.mjs";
-import { readXlsx, sheetToObjects } from "./xlsx-reader.mjs";
+import { chapman, hostOf, isHeldOut, seriesKey } from "./registry-seeds.mjs";
+import { buildTruthFromDatasets, COVERAGE_LATEST, getPrivateJson, putPrivateJson, TRUTH_OBJECT, truthEntries } from "./coverage-truth.mjs";
 
-const ACTIONABLE = /^(?:open|upcoming|rolling|announced|in_progress)/i;
 
 async function pages(path, pageSize = 1000) {
   const rows = [];
@@ -33,29 +31,14 @@ function overlap(left, right) {
   return shared / Math.min(left.size, right.size);
 }
 
+// Truth: the owner's local XLSX datasets when given, otherwise the truth file
+// in the private Supabase bucket (the weekly CI run). Only aggregates are
+// printed: Actions logs are public.
 const paths = String(process.env.CINERADAR_SEED_DATASETS ?? "").split(";").map((value) => value.trim()).filter(Boolean);
-if (!paths.length) throw new Error("Set CINERADAR_SEED_DATASETS to the owner dataset XLSX paths");
-
-const truth = new Map();
-const allDatasetFestivalHosts = new Set();
-for (const path of paths) {
-  const workbook = await readXlsx(path);
-  for (const sheet of workbook.sheets.filter((item) => item.name === "Dataset" || item.name === "Editions")) {
-    for (const row of sheetToObjects(sheet)) {
-      const key = seriesKey(row.event_series ?? row.opportunity_name);
-      if (!key) continue;
-      const hosts = [row.official_url, row.source_url].map(hostOf).filter((host) => host && !isPlatformHost(host));
-      if (/festival|short|animation|screening/i.test(String(row.category_primary ?? ""))) {
-        for (const host of hosts) allDatasetFestivalHosts.add(host);
-      }
-      if (!ACTIONABLE.test(String(row.status_at_2026_09_25 ?? ""))) continue;
-      const entry = truth.get(key) ?? { key, hosts: new Set(), names: new Set(), dataset: basename(path) };
-      for (const host of hosts) entry.hosts.add(host);
-      entry.names.add(String(row.event_series ?? row.opportunity_name));
-      truth.set(key, entry);
-    }
-  }
-}
+const truthFile = paths.length ? await buildTruthFromDatasets(paths) : await getPrivateJson(TRUTH_OBJECT);
+if (!truthFile) throw new Error("No truth: set CINERADAR_SEED_DATASETS or run upload-coverage-truth.mjs once");
+const truth = new Map(truthEntries(truthFile).map((entry) => [entry.key, entry]));
+const allDatasetFestivalHosts = new Set(truthFile.festival_hosts ?? []);
 
 const sources = await pages("sources?select=name,url,enabled,last_checked_at,health_status,adapter_config&order=url.asc");
 const sourceHosts = new Map();
@@ -136,7 +119,7 @@ const heldOut = entries.filter((entry) => isHeldOut(entry.key));
 const seeded = entries.filter((entry) => !isHeldOut(entry.key));
 const shared = [...allDatasetFestivalHosts].filter((host) => wikidataHosts.has(host)).length;
 
-console.log(JSON.stringify({
+const coverageReport = {
   measured_at: new Date().toISOString(),
   truth: "owner datasets, series actionable at 2026-09-25 (open/upcoming/rolling)",
   held_out_20pct: report(heldOut),
@@ -155,4 +138,10 @@ console.log(JSON.stringify({
     overlap: shared,
     estimated_festival_hosts: wikidataHosts.size ? chapman(wikidataHosts.size, allDatasetFestivalHosts.size, shared) : null,
   },
-}, null, 2));
+};
+console.log(JSON.stringify(coverageReport, null, 2));
+// --store: keep the report in the private bucket (latest + one per day).
+if (process.argv.includes("--store")) {
+  await putPrivateJson(COVERAGE_LATEST, coverageReport);
+  await putPrivateJson(`evaluation/coverage-${coverageReport.measured_at.slice(0, 10)}.json`, coverageReport);
+}
