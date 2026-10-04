@@ -51,10 +51,32 @@ export async function selectIn(table, select, column, values, { chunk = 100 } = 
   return rows;
 }
 
+const RETRYABLE_STATUS = new Set([429, 502, 503, 504]);
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * One PostgREST request. A dropped connection ("fetch failed") or a gateway
+ * hiccup (429/502/503/504) is retried up to three times with backoff: a
+ * single transient network error used to abort a 30-minute monitor run.
+ */
 export async function supabase(path, init = {}) {
-  const response = await supabaseResponse(path, init);
-  if (!response.ok) throw new Error(`Supabase ${response.status}: ${await response.text()}`);
-  return parseSupabasePayload(response);
+  for (let attempt = 1; ; attempt += 1) {
+    let response;
+    try {
+      response = await supabaseResponse(path, init);
+    } catch (error) {
+      if (attempt >= 4) throw error;
+      await sleep(1000 * 2 ** (attempt - 1));
+      continue;
+    }
+    if (RETRYABLE_STATUS.has(response.status) && attempt < 4) {
+      await response.text().catch(() => "");
+      await sleep(1000 * 2 ** (attempt - 1));
+      continue;
+    }
+    if (!response.ok) throw new Error(`Supabase ${response.status}: ${await response.text()}`);
+    return parseSupabasePayload(response);
+  }
 }
 
 export async function parseSupabasePayload(response) {

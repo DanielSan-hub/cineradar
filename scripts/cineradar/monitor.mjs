@@ -440,7 +440,8 @@ try {
       ).catch(() => {});
       recordRejection(metrics, error.code ?? "FETCH_FAILED");
       console.warn(`Refresh failed for ${requestUrl}: ${error.message}`);
-      await updateSource(source, { checkedAt: startedAt, failed: true, error });
+      // Bookkeeping for one source must never abort the whole run.
+      await updateSource(source, { checkedAt: startedAt, failed: true, error }).catch(() => {});
       await recordAttempt(source, {
         status: "failed",
         request_count: 1,
@@ -450,7 +451,7 @@ try {
         finished_at: new Date().toISOString(),
         request_url: requestUrl,
         error: String(error.message).slice(0, 1000),
-      });
+      }).catch(() => {});
       return { ok: false, changed: false, childPages: 0, newCandidateCount: 0 };
     }
   });
