@@ -12,7 +12,7 @@ import { IFM_SITEMAP, ifmGrantUrls, ifmRawItem, parseIfmGrant } from "./italy-fo
 import { dedupeOpportunitiesDetailed } from "./normalization.mjs";
 import { persistProvenance, withProvenance } from "./operations.mjs";
 import { processFetchedPage } from "./process-page.mjs";
-import { hostOf, isPlatformHost } from "./registry-seeds.mjs";
+import { hostOf, isPlatformHost, safeSeedUrl } from "./registry-seeds.mjs";
 import { createRobotsChecker } from "./robots.mjs";
 import { finishRun, ingest, startRun, supabase } from "./supabase.mjs";
 import { createRunMetrics, incrementMetric, metricsRunPatch, recordRejection, summarizeMetrics } from "./telemetry.mjs";
@@ -99,7 +99,7 @@ if (apply && funders.size) {
     for (const row of batch) known.add(hostOf(row.url));
     if (batch.length < 1000) break;
   }
-  const fresh = [...funders.entries()].filter(([host]) => !known.has(host)).map(([, funder]) => ({
+  const fresh = [...funders.entries()].filter(([host, funder]) => !known.has(host) && safeSeedUrl(funder.url)).map(([, funder]) => ({
     name: funder.name.slice(0, 200), url: funder.url, tier: 2, priority: 1, source_type: "official", source_family: "film-funding",
     country: "IT", language: "it", opportunity_categories: ["grant"], adapter: "link-window",
     adapter_config: { checkpoint_key: "default", link_window_size: 6, seed: "platform:italyformovies" },

@@ -303,10 +303,23 @@ try {
     ? await selectIn("source_checkpoints", "*", "source_id", sourceIds)
     : [];
   const checkpointBySource = new Map(checkpointRows.map((row) => [row.source_id, row]));
-  const plans = sources.map((source) => {
+  // One malformed source URL (e.g. an e-mail address listed as a website)
+  // must never stop the whole run: it is skipped and taken out of rotation.
+  const plans = [];
+  for (const source of sources) {
     const checkpoint = checkpointFor(source, checkpointBySource.get(source.id));
-    return { source, checkpoint, requestUrl: buildNextSourceRequestUrl(source, checkpoint) };
-  });
+    try {
+      plans.push({ source, checkpoint, requestUrl: buildNextSourceRequestUrl(source, checkpoint) });
+    } catch (error) {
+      recordRejection(metrics, "INVALID_SOURCE_URL");
+      console.warn(`Skipping source ${source.id}: ${error.message}`);
+      await supabase(`sources?id=eq.${source.id}`, {
+        method: "PATCH",
+        prefer: "return=minimal",
+        body: JSON.stringify({ enabled: false, health_status: "blocked", health_message: "INVALID_URL: not an absolute http(s) URL" }),
+      }).catch(() => {});
+    }
+  }
   const initialCache = await fetchUrlCache(plans.map((plan) => plan.requestUrl));
 
   const deadline = Date.now() + config.monitorTimeBudgetSeconds * 1000;

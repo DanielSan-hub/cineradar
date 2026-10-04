@@ -23,7 +23,6 @@ import {
   sourceFromPortalRow,
   sourceFromWikidata,
 } from "./registry-seeds.mjs";
-import { readXlsx, sheetToObjects } from "./xlsx-reader.mjs";
 
 const USER_AGENT = "CineRadarBot/2.0 (+https://cineradar.danielmaker.chatgpt.site)";
 const apply = process.argv.includes("--apply");
@@ -71,6 +70,9 @@ async function loadWikidata() {
 }
 
 async function loadDatasets(paths) {
+  // Loaded only for the owner's local dataset import: the monthly Wikidata
+  // refresh in CI runs without installed packages (fflate).
+  const { readXlsx, sheetToObjects } = await import("./xlsx-reader.mjs");
   const seriesRows = [];
   const portalRows = [];
   for (const path of paths) {

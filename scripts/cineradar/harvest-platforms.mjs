@@ -31,7 +31,7 @@ import {
   parseFesthomeListing,
 } from "./platform-connectors.mjs";
 import { processFetchedPage } from "./process-page.mjs";
-import { hostOf, isPlatformHost } from "./registry-seeds.mjs";
+import { hostOf, isPlatformHost, safeSeedUrl } from "./registry-seeds.mjs";
 import { createRobotsChecker } from "./robots.mjs";
 import { finishRun, ingest, startRun, supabase } from "./supabase.mjs";
 import { createRunMetrics, incrementMetric, metricsRunPatch, recordRejection, summarizeMetrics } from "./telemetry.mjs";
@@ -127,9 +127,11 @@ async function knownHosts(hosts) {
 }
 
 function websiteSource(site, platform) {
+  const url = safeSeedUrl(site.url);
+  if (!url) return null;
   return {
     name: site.name.slice(0, 200),
-    url: site.url,
+    url,
     tier: 2,
     priority: site.ai ? 1 : 2,
     source_type: "official",
@@ -270,7 +272,7 @@ for (const key of selected) {
   // 3. New festival websites join the registry; the listing state is saved.
   if (apply && websites.size) {
     const known = await knownHosts([...websites.keys()]);
-    const fresh = [...websites.entries()].filter(([host]) => !known.has(host)).map(([, site]) => websiteSource(site, key));
+    const fresh = [...websites.entries()].filter(([host]) => !known.has(host)).map(([, site]) => websiteSource(site, key)).filter(Boolean);
     for (let index = 0; index < fresh.length; index += 200) {
       await supabase("sources?on_conflict=url", { method: "POST", prefer: "resolution=ignore-duplicates,return=minimal", body: JSON.stringify(fresh.slice(index, index + 200)) });
     }
